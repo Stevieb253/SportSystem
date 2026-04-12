@@ -129,24 +129,34 @@ def normalize_probable_pitcher(
         except (KeyError, TypeError, ValueError):
             return default
 
+    def _svp(*keys: str) -> float:
+        """Read Savant percentage field — auto-convert 0-100 → 0-1 if value > 1."""
+        for k in keys:
+            v = sv.get(k)
+            if v is not None:
+                f = _safe_float(v)
+                if f:
+                    return round(f / 100, 6) if f > 1.0 else f
+        return 0.0
+
     return ProbablePitcher(
         id=pid,
         name=name,
         hand=hand,
         era=_safe_float(sv.get("p_era") or sv.get("era")) or _fg("ERA"),
         xera=_safe_float(sv.get("xera") or sv.get("p_xera")) or _fg("xERA"),
-        k9=_fg("K/9"),
-        bb9=_fg("BB/9"),
-        hr9=_fg("HR/9"),
-        whip=_fg("WHIP"),
+        k9=_safe_float(sv.get("k9")) or _fg("K/9"),
+        bb9=_safe_float(sv.get("bb9")) or _fg("BB/9"),
+        hr9=_safe_float(sv.get("hr9")) or _fg("HR/9"),
+        whip=_safe_float(sv.get("whip")) or _fg("WHIP"),
         fip=_fg("FIP"),
-        k_pct=_safe_float(sv.get("k_percent")),
-        bb_pct=_safe_float(sv.get("bb_percent")),
-        hard_hit_pct_allowed=_safe_float(sv.get("hard_hit_percent")),
-        barrel_pct_allowed=_safe_float(sv.get("barrel_batted_rate") or sv.get("brl_percent")),
+        k_pct=_svp("k_percent"),
+        bb_pct=_svp("bb_percent"),
+        hard_hit_pct_allowed=_svp("hard_hit_percent", "ev95percent"),
+        barrel_pct_allowed=_svp("barrel_batted_rate", "brl_percent"),
         avg_exit_velo_allowed=_safe_float(sv.get("exit_velocity_avg") or sv.get("avg_hit_speed")),
         xwoba_allowed=_safe_float(sv.get("xwoba")),
-        whiff_pct_generated=_safe_float(sv.get("whiff_percent")),
+        whiff_pct_generated=_svp("whiff_percent"),
     )
 
 
@@ -191,10 +201,29 @@ def normalize_batter(
         except (KeyError, TypeError, ValueError):
             return default
 
+    def _sv(*keys: str, pct: bool = False) -> float:
+        """Look up first non-zero value from sv dict.
+
+        Args:
+            *keys: Savant field names to try in order.
+            pct: If True and value > 1, divide by 100.
+                 Savant CSV returns percentages as 0-100 (e.g. k_percent=28.5),
+                 but the model stores 0-1 decimals (0.285) for display as 28.5%.
+        """
+        for k in keys:
+            v = sv.get(k)
+            if v is not None:
+                f = _safe_float(v)
+                if f:
+                    if pct and f > 1.0:
+                        return round(f / 100, 6)
+                    return f
+        return 0.0
+
     recent = calculate_recent_metrics_from_statcast(recent_savant_records)
     platoon = calculate_platoon_advantage(hand, vs_pitcher.hand)
 
-    avg = _safe_float(sv.get("ba") or sv.get("batting_avg")) or _fg("AVG")
+    avg = _safe_float(sv.get("ba") or sv.get("batting_avg") or sv.get("avg")) or _fg("AVG")
 
     return BatterMetrics(
         player_id=player_id,
@@ -202,31 +231,33 @@ def normalize_batter(
         team=team,
         hand=hand,
         season=season,
-        games=int(_safe_float(sv.get("player_age")) or _fg("G")),  # games from FG
-        pa=int(_safe_float(sv.get("pa"))) or int(_fg("PA")),
+        games=int(_fg("G")),  # games played from FanGraphs (player_age is not games)
+        pa=int(_safe_float(sv.get("pa") or sv.get("plateAppearances"))) or int(_fg("PA")),
         avg=avg,
-        obp=_fg("OBP"),
-        slg=_fg("SLG"),
-        ops=_fg("OPS"),
+        obp=_safe_float(sv.get("obp")) or _fg("OBP"),
+        slg=_safe_float(sv.get("slg")) or _fg("SLG"),
+        ops=_safe_float(sv.get("ops")) or _fg("OPS"),
         woba=_safe_float(sv.get("woba")) or _fg("wOBA"),
-        # Statcast leaderboard fields
-        avg_exit_velo=_safe_float(sv.get("exit_velocity_avg") or sv.get("avg_hit_speed")),
-        avg_launch_angle=_safe_float(sv.get("launch_angle_avg")),
+        # Statcast leaderboard fields — CSV columns aliased by _normalize_savant_row()
+        # Non-percentage fields: exit velo (mph), launch angle (degrees), EV50 (mph)
+        avg_exit_velo=_sv("exit_velocity_avg", "avg_hit_speed"),
+        avg_launch_angle=_sv("launch_angle_avg", "avg_hit_angle"),
         barrel_count=int(_safe_float(sv.get("barrels"))),
-        barrel_pct=_safe_float(sv.get("brl_pa") or sv.get("brl_percent") or sv.get("barrel_batted_rate")),
-        hard_hit_pct=_safe_float(sv.get("hard_hit_percent")),
-        sweet_spot_pct=_safe_float(sv.get("sweet_spot_percent")),
-        ideal_la_pct=_safe_float(sv.get("ideal_la_percent")),
+        ev50=_sv("ev50", "avg_best_speed"),
+        # Percentage fields (Savant CSV returns 0-100, pct=True converts to 0-1)
+        barrel_pct=_sv("brl_pa", "brl_percent", "barrel_batted_rate", pct=True),
+        hard_hit_pct=_sv("hard_hit_percent", "ev95percent", pct=True),
+        sweet_spot_pct=_sv("sweet_spot_percent", "anglesweetspotpercent", pct=True),
+        ideal_la_pct=_sv("ideal_la_percent", pct=True),
         hr_fb_ratio=_safe_float(sv.get("hr_fb_pct")) or _fg("HR/FB"),
-        ev50=_safe_float(sv.get("ev50") or sv.get("avg_best_speed")),
-        # Custom leaderboard fields
+        # Custom leaderboard fields (xBA, xwOBA, xSLG are decimals; k%/bb%/whiff% are 0-100)
         xba=_safe_float(sv.get("xba") or sv.get("est_ba")),
         xwoba=_safe_float(sv.get("xwoba") or sv.get("est_woba")),
         xslg=_safe_float(sv.get("xslg") or sv.get("est_slg")),
-        k_pct=_safe_float(sv.get("k_percent")),
-        bb_pct=_safe_float(sv.get("bb_percent")),
-        whiff_pct=_safe_float(sv.get("whiff_percent")),
-        swing_pct=_safe_float(sv.get("swing_percent")),
+        k_pct=_sv("k_percent", pct=True),
+        bb_pct=_sv("bb_percent", pct=True),
+        whiff_pct=_sv("whiff_percent", pct=True),
+        swing_pct=_sv("swing_percent", pct=True),
         # Derived
         hr_count=int(_fg("HR")),
         hr_per_game=round(_fg("HR") / max(_fg("G"), 1), 4),
@@ -309,48 +340,39 @@ def _minimal_pitcher(raw: dict) -> ProbablePitcher:
 
 
 def _format_game_time(utc_str: str, tz_info: dict) -> str:
-    """Convert UTC game datetime string to formatted local time string.
+    """Convert UTC game datetime string to Pacific time.
 
-    Uses the venue's UTC offset from the MLB API timeZone object.
-    Falls back to Pacific time (UTC-7 PDT / UTC-8 PST) if offset unavailable.
+    Always displays in Pacific time (PDT Apr-Oct, PST Nov-Mar) regardless
+    of the venue's local timezone — consistent single timezone for all games.
 
     Args:
         utc_str: UTC datetime string e.g. '2026-04-12T17:35:00Z'.
-        tz_info: MLB API timeZone dict with 'offsetAtGameTime', 'tz' keys.
+        tz_info: Unused (kept for signature compatibility).
 
     Returns:
-        Formatted string e.g. '1:35 PM EDT' or '10:35 AM PDT'.
+        Formatted string e.g. '10:35 AM PDT'.
     """
     if not utc_str:
         return "TBD"
+
+    # Determine Pacific offset: PDT (UTC-7) Mar-Nov, PST (UTC-8) Nov-Mar
+    # Simple month-based rule: months 3-11 = PDT, else PST
     try:
-        # Parse UTC
-        clean = utc_str.replace("Z", "+00:00")
+        clean  = utc_str.replace("Z", "+00:00")
         utc_dt = datetime.fromisoformat(clean)
-
-        # Get offset hours from MLB API (e.g. -4 for EDT, -7 for PDT)
-        offset_hours = tz_info.get("offsetAtGameTime") if tz_info else None
-        tz_abbr      = tz_info.get("tz", "ET") if tz_info else "PT"
-
-        if offset_hours is not None:
-            local_tz = timezone(timedelta(hours=float(offset_hours)))
+        month  = utc_dt.month
+        if 3 <= month <= 11:
+            pt_offset = -7
+            tz_abbr   = "PDT"
         else:
-            # Default: Pacific Daylight Time (UTC-7, April-October)
-            local_tz = timezone(timedelta(hours=-7))
-            tz_abbr  = "PDT"
+            pt_offset = -8
+            tz_abbr   = "PST"
 
-        local_dt = utc_dt.astimezone(local_tz)
-        return local_dt.strftime(f"%-I:%M %p {tz_abbr}")
+        pt_tz    = timezone(timedelta(hours=pt_offset))
+        local_dt = utc_dt.astimezone(pt_tz)
+
+        # Windows-compatible: strip leading zero from hour manually
+        t = local_dt.strftime("%I:%M %p").lstrip("0")
+        return f"{t} {tz_abbr}"
     except Exception:
-        # On Windows strftime doesn't support %-I — use %I and strip leading 0
-        try:
-            clean = utc_str.replace("Z", "+00:00")
-            utc_dt = datetime.fromisoformat(clean)
-            offset_hours = tz_info.get("offsetAtGameTime") if tz_info else -7
-            tz_abbr = tz_info.get("tz", "ET") if tz_info else "PDT"
-            local_tz = timezone(timedelta(hours=float(offset_hours or -7)))
-            local_dt = utc_dt.astimezone(local_tz)
-            t = local_dt.strftime("%I:%M %p").lstrip("0")
-            return f"{t} {tz_abbr}"
-        except Exception:
-            return utc_str[:16].replace("T", " ") + " UTC"
+        return utc_str[:16].replace("T", " ") + " UTC"

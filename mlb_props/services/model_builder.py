@@ -87,6 +87,16 @@ class ModelBuilder:
         hr_results:  list[HRProbabilityResult]  = []
 
         for game in games:
+            # Enrich game's pitcher stubs with full Savant/MLB API stats
+            # so game cards and detail pages show real ERA/xERA/WHIP
+            game.home_pitcher = self.pipeline.load_pitcher_data(
+                game.home_pitcher.id, game.home_pitcher.name, game.home_pitcher.hand,
+                savant_data, fg_data,
+            )
+            game.away_pitcher = self.pipeline.load_pitcher_data(
+                game.away_pitcher.id, game.away_pitcher.name, game.away_pitcher.hand,
+                savant_data, fg_data,
+            )
             game_hit, game_hr = self._process_game(
                 game, savant_data, fg_data, park_factors_df
             )
@@ -149,23 +159,13 @@ class ModelBuilder:
             game.venue.name, park_factors_df
         )
 
-        # Load enriched pitchers
-        home_pitcher = self.pipeline.load_pitcher_data(
-            game.home_pitcher.id,
-            game.home_pitcher.name,
-            game.home_pitcher.hand,
-            savant_data,
-            fg_data,
-        )
-        away_pitcher = self.pipeline.load_pitcher_data(
-            game.away_pitcher.id,
-            game.away_pitcher.name,
-            game.away_pitcher.hand,
-            savant_data,
-            fg_data,
-        )
+        # Use the already-enriched pitchers from the game object (set in build_daily_model)
+        home_pitcher = game.home_pitcher
+        away_pitcher = game.away_pitcher
 
         # Home lineup faces away pitcher; away lineup faces home pitcher
+        # Note: pitchers are already enriched on game.home_pitcher / game.away_pitcher
+        # in build_daily_model() so we use those directly here.
         from api import mlb_api
         lineup_data = mlb_api.get_schedule(game.date)
         home_lineup, away_lineup = _extract_lineups(game.game_pk, lineup_data)

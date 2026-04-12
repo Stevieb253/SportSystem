@@ -58,13 +58,57 @@ def _get(url: str, params: dict) -> list[dict]:
 
 
 def _parse_csv_fallback(text: str) -> list[dict]:
-    """Parse a CSV-format response from Baseball Savant into a list of dicts."""
+    """Parse a CSV-format response from Baseball Savant into a list of dicts.
+
+    Baseball Savant CSV responses often include a UTF-8 BOM (\\ufeff) at the
+    start. If left in place, DictReader splits the quoted "last_name, first_name"
+    header at the comma, mangling that column and shifting all subsequent values.
+    Stripping the BOM first ensures correct column alignment.
+    """
     import csv, io
     try:
-        reader = csv.DictReader(io.StringIO(text))
-        return [row for row in reader]
-    except Exception:
+        # Strip UTF-8 BOM so "last_name, first_name" header parses as one quoted column
+        clean = text.lstrip('\ufeff')
+        reader = csv.DictReader(io.StringIO(clean))
+        return [_normalize_savant_row(row) for row in reader]
+    except Exception as exc:
+        logger.warning("CSV parse failed: %s", exc)
         return []
+
+
+def _normalize_savant_row(row: dict) -> dict:
+    """Normalize Baseball Savant CSV column names to the field names used by normalizer.py.
+
+    Savant CSV columns use different names than what normalizer.py looks up.
+    This function adds aliased keys so both names are present in the dict.
+    """
+    r = dict(row)
+
+    # Synthesize player_name from "last_name, first_name" CSV column
+    raw_name = r.get("last_name, first_name", "")
+    if raw_name and "," in raw_name:
+        last, first = raw_name.split(",", 1)
+        r["player_name"] = f"{first.strip()} {last.strip()}"
+    elif raw_name:
+        r["player_name"] = raw_name
+
+    # Alias CSV column names → normalizer field names (add alias if dst not already present)
+    _aliases = {
+        "anglesweetspotpercent": "sweet_spot_percent",
+        "avg_hit_angle":         "launch_angle_avg",
+        "ev95percent":           "hard_hit_percent",
+        "avg_best_speed":        "ev50",
+        "brl_percent":           "barrel_batted_rate",
+        "batting_avg":           "ba",
+        # Pitcher aliases
+        "p_era":                 "era",
+        "p_xera":                "xera",
+    }
+    for src, dst in _aliases.items():
+        if src in r and dst not in r:
+            r[dst] = r[src]
+
+    return r
 
 
 def get_statcast_leaderboard(year: int, player_type: str) -> list[dict]:
@@ -90,6 +134,7 @@ def get_statcast_leaderboard(year: int, player_type: str) -> list[dict]:
         "sort":    "barrels_per_pa" if player_type == "batter" else "exit_velocity_avg",
         "sortDir": "desc",
         "results": "all",
+        "csv":     "true",         # Force CSV response — confirmed returning 352 batters
     }
     time.sleep(config.SAVANT_REQUEST_DELAY_SECONDS)
     data = _get(config.SAVANT_STATCAST_LEADERBOARD_URL, params)
@@ -120,7 +165,7 @@ def get_custom_leaderboard(year: int, player_type: str) -> list[dict]:
         if player_type == "batter"
         else config.SAVANT_PITCHER_CUSTOM_PARAMS
     )
-    params = {**base_params, "year": year, "min": "10", "results": "all"}
+    params = {**base_params, "year": year, "min": "10", "results": "all", "csv": "true"}
 
     time.sleep(config.SAVANT_REQUEST_DELAY_SECONDS)
     data = _get(config.SAVANT_CUSTOM_LEADERBOARD_URL, params)
@@ -149,8 +194,9 @@ def get_expected_stats(year: int, player_type: str) -> list[dict]:
     params: dict = {
         "type":    player_type,
         "year":    year,
-        "min":     "q",
+        "min":     "10",    # "q" is too strict early season — use 10 PA/BF minimum
         "results": "all",
+        "csv":     "true",
     }
     time.sleep(config.SAVANT_REQUEST_DELAY_SECONDS)
     data = _get(config.SAVANT_EXPECTED_STATS_URL, params)

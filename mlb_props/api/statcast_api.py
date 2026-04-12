@@ -63,11 +63,23 @@ def get_season_batting_fangraphs(year: int, min_pa: int = 25) -> pd.DataFrame:
         logger.warning("FanGraphs batting stats failed (year=%s): %s", year, exc)
 
     # Fallback to Baseball Reference via pybaseball
+    # bref scraping is brittle — can fail with "list index out of range" on HTML changes.
     try:
         df = pb.batting_stats_bref(year)
-        if not df.empty and _cache:
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError(f"bref returned non-DataFrame: {type(df)}")
+        if df.empty:
+            return pd.DataFrame()
+        if _cache:
             _cache.set(cache_key, df.to_dict(orient="records"))
         return df
+    except (IndexError, KeyError, ValueError, AttributeError) as exc2:
+        # HTML structure changed or empty page — log and return empty, caller will use MLB API
+        logger.warning(
+            "Baseball Reference batting stats failed (year=%s) — falling back to MLB API: %s",
+            year, exc2,
+        )
+        return pd.DataFrame()
     except Exception as exc2:
         logger.warning("Baseball Reference batting stats also failed (year=%s): %s", year, exc2)
         return pd.DataFrame()
@@ -103,9 +115,19 @@ def get_season_pitching_fangraphs(year: int, min_ip: int = 5) -> pd.DataFrame:
 
     try:
         df = pb.pitching_stats_bref(year)
-        if not df.empty and _cache:
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError(f"bref returned non-DataFrame: {type(df)}")
+        if df.empty:
+            return pd.DataFrame()
+        if _cache:
             _cache.set(cache_key, df.to_dict(orient="records"))
         return df
+    except (IndexError, KeyError, ValueError, AttributeError) as exc2:
+        logger.warning(
+            "Baseball Reference pitching stats failed (year=%s) — falling back to MLB API: %s",
+            year, exc2,
+        )
+        return pd.DataFrame()
     except Exception as exc2:
         logger.warning("Baseball Reference pitching stats also failed (year=%s): %s", year, exc2)
         return pd.DataFrame()

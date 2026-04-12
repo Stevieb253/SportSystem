@@ -121,6 +121,52 @@ def get_player_info(player_id: int) -> dict:
     return data
 
 
+def get_player_stats(player_id: int, group: str, season: int) -> dict:
+    """Fetch a player's season stats for a given stat group from the MLB Stats API.
+
+    Used as a fallback when Baseball Savant and FanGraphs data are unavailable.
+    Returns a flat dict of stat keys so normalizer.py can read them directly.
+
+    Args:
+        player_id: MLBAM player ID.
+        group: Stat group — 'hitting' or 'pitching'.
+        season: Season year (e.g. 2026).
+
+    Returns:
+        Flat dict of stats (e.g. {'era': 3.52, 'avg': 0.271, ...}),
+        empty dict if player not found or API failure.
+    """
+    cache_key = f"mlb_stats_{player_id}_{group}_{season}"
+    if _cache:
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    url = f"{config.MLB_API_BASE_URL}/people/{player_id}/stats"
+    params = {
+        "stats":  "season",
+        "group":  group,
+        "season": season,
+    }
+    data = _get(url, params)
+
+    # Drill into the nested stats structure
+    flat: dict = {}
+    try:
+        stats_list = data.get("stats", [])
+        for stat_group in stats_list:
+            splits = stat_group.get("splits", [])
+            if splits:
+                raw = splits[0].get("stat", {})
+                flat.update(raw)
+    except Exception as exc:
+        logger.warning("Failed to parse player stats (id=%s group=%s): %s", player_id, group, exc)
+
+    if _cache and flat:
+        _cache.set(cache_key, flat)
+    return flat
+
+
 def get_standings(season: int) -> dict:
     """Fetch league standings for a season.
 
