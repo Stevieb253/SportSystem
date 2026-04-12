@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+{% block title %}MLB Props — {{ selected_date }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">DAILY MODEL</h1>
+  <div class="date-nav">
+    <input type="date" id="date-picker" value="{{ selected_date }}" onchange="navigateToDate(this.value)" class="date-input" />
+  </div>
+</div>
+
+{% if model.get('error') %}
+<div class="alert alert-error">{{ model.error }}</div>
+{% endif %}
+
+{% if not model.get('lineups_confirmed') %}
+<div class="alert alert-info">
+  Lineups not yet posted — showing probable pitcher matchups. Refreshing automatically.
+</div>
+{% endif %}
+
+<!-- ── Data source badges ── -->
+{% if model.get('data_sources') %}
+<div class="source-badges">
+  {% for src in model.data_sources %}
+  <span class="badge badge-source">{{ src }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ── Tab buttons ── -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="showTab('games', this)">Games ({{ model.get('games', [])|length }})</button>
+  <button class="tab-btn" onclick="showTab('hits', this)">Hit Probability ({{ model.get('hit_probabilities', [])|length }})</button>
+  <button class="tab-btn" onclick="showTab('hrs', this)">Home Runs ({{ model.get('hr_probabilities', [])|length }})</button>
+  <button class="tab-btn" onclick="showTab('live', this)">Live Scores</button>
+</div>
+
+<!-- ════════════════════════════════════════════════
+     TAB 1 — GAMES
+════════════════════════════════════════════════ -->
+<div id="tab-games" class="tab-content active">
+  {% if model.get('games') %}
+  <div class="games-grid">
+    {% for game in model.games %}
+    {% set g = game if game is mapping else game.__dict__ if hasattr(game, '__dict__') else {} %}
+    <a href="/game/{{ g.get('game_pk', 0) }}" class="game-card">
+      <div class="game-card-header">
+        <span class="matchup-text">
+          {{ g.get('away_team', {}).get('abbreviation', 'AWY') }}
+          <span class="at-symbol">@</span>
+          {{ g.get('home_team', {}).get('abbreviation', 'HME') }}
+        </span>
+        <span class="game-status status-{{ g.get('status', 'scheduled') }}">
+          {{ g.get('status', 'scheduled')|upper }}
+        </span>
+      </div>
+
+      <div class="game-meta">
+        <span class="game-time">{{ g.get('game_time_local', 'TBD') }}</span>
+        <span class="venue-name">{{ g.get('venue', {}).get('name', '') }}</span>
+      </div>
+
+      {% set weather = g.get('weather', {}) %}
+      <div class="weather-row">
+        {% if weather.get('is_dome') %}
+        <span class="dome-badge">DOME</span>
+        {% else %}
+        <span class="wx-condition">{{ weather.get('condition_text', '') }}</span>
+        <span class="weather-temp">{{ weather.get('temp_f', 72)|round|int }}°F</span>
+        <span class="weather-wind">{{ weather.get('wind_speed_mph', 0)|round|int }} mph</span>
+        {% if weather.get('precipitation_mm', 0) > 0 %}
+        <span class="wx-precip">{{ "%.1f"|format(weather.get('precipitation_mm', 0)) }}mm</span>
+        {% endif %}
+        {% endif %}
+      </div>
+
+      <div class="pitchers-row">
+        {% set hp = g.get('home_pitcher', {}) %}
+        {% set ap = g.get('away_pitcher', {}) %}
+        <div class="pitcher-chip">
+          <span class="pitcher-side">HME</span>
+          <span class="pitcher-name">{{ hp.get('name', 'TBD') }}</span>
+          <span class="pitcher-stat">ERA {{ hp.get('era', 0)|round(2) }}</span>
+          {% if hp.get('xera') %}<span class="pitcher-stat xera">xERA {{ hp.get('xera')|round(2) }}</span>{% endif %}
+        </div>
+        <div class="pitcher-chip">
+          <span class="pitcher-side">AWY</span>
+          <span class="pitcher-name">{{ ap.get('name', 'TBD') }}</span>
+          <span class="pitcher-stat">ERA {{ ap.get('era', 0)|round(2) }}</span>
+          {% if ap.get('xera') %}<span class="pitcher-stat xera">xERA {{ ap.get('xera')|round(2) }}</span>{% endif %}
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">No games scheduled for {{ selected_date }}.</div>
+  {% endif %}
+</div>
+
+<!-- ════════════════════════════════════════════════
+     TAB 2 — HIT PROBABILITY
+════════════════════════════════════════════════ -->
+<div id="tab-hits" class="tab-content">
+  <div class="table-controls">
+    <input type="text" id="hit-search" class="search-input" placeholder="Filter by player..." oninput="searchTable('hit-table', this.value)" />
+    <div class="filter-btns">
+      <button class="filter-btn active" onclick="filterTable('hit-table', 'ALL', this)">All</button>
+      <button class="filter-btn verdict-yes" onclick="filterTable('hit-table', 'YES', this)">YES</button>
+      <button class="filter-btn verdict-lean" onclick="filterTable('hit-table', 'LEAN', this)">LEAN</button>
+      <button class="filter-btn verdict-no" onclick="filterTable('hit-table', 'NO', this)">NO</button>
+    </div>
+  </div>
+
+  {% if model.get('hit_probabilities') %}
+  <div class="table-wrap">
+    <table id="hit-table" class="data-table">
+      <thead>
+        <tr>
+          <th onclick="sortTable('hit-table', 0)">Player</th>
+          <th onclick="sortTable('hit-table', 1)">Game</th>
+          <th onclick="sortTable('hit-table', 2)">vs Pitcher</th>
+          <th onclick="sortTable('hit-table', 3)">AVG</th>
+          <th onclick="sortTable('hit-table', 4)">xBA</th>
+          <th onclick="sortTable('hit-table', 5)">xwOBA</th>
+          <th onclick="sortTable('hit-table', 6)">Hard Hit%</th>
+          <th onclick="sortTable('hit-table', 7)">Sweet Spot%</th>
+          <th onclick="sortTable('hit-table', 8)">Barrel%</th>
+          <th onclick="sortTable('hit-table', 9)">Whiff%</th>
+          <th onclick="sortTable('hit-table', 10)">Exit Velo</th>
+          <th onclick="sortTable('hit-table', 11)">Hit Prob</th>
+          <th onclick="sortTable('hit-table', 12)">Verdict</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in model.hit_probabilities %}
+        {% set p = r.player if r is not mapping else r.get('player', {}) %}
+        {% set g = r.game if r is not mapping else r.get('game', {}) %}
+        {% set vp = r.vs_pitcher if r is not mapping else r.get('vs_pitcher', {}) %}
+        {% set prob = r.hit_probability if r is not mapping else r.get('hit_probability', 0) %}
+        {% set verdict = r.hit_verdict if r is not mapping else r.get('hit_verdict', 'NO') %}
+
+        {% set pdict = p if p is mapping else p.__dict__ if hasattr(p, '__dict__') else {} %}
+        {% set gdict = g if g is mapping else g.__dict__ if hasattr(g, '__dict__') else {} %}
+        {% set vpdict = vp if vp is mapping else vp.__dict__ if hasattr(vp, '__dict__') else {} %}
+
+        <tr class="verdict-row verdict-{{ verdict|lower }}" data-verdict="{{ verdict }}">
+          <td>
+            <div class="player-cell">
+              <img src="{{ pdict.get('player_id', 0) | mlb_photo }}" class="player-headshot" alt="{{ pdict.get('name', '') }}" onerror="this.src='https://img.mlb.com/headshots/current/60x60/generic@2x.jpg'" />
+              <div class="player-cell-info">
+                <span class="player-name">{{ pdict.get('name', '') }}</span>
+                <span class="player-meta">{{ pdict.get('team', '') }} #{{ pdict.get('lineup_position', '') }}</span>
+              </div>
+            </div>
+          </td>
+          <td class="mono">
+            {{ gdict.get('away_team', {}).get('abbreviation', '') }}
+            @
+            {{ gdict.get('home_team', {}).get('abbreviation', '') }}
+          </td>
+          <td>{{ vpdict.get('name', '') }}</td>
+          <td class="mono">{{ "%.3f"|format(pdict.get('avg', 0)) }}</td>
+          <td class="mono {% if pdict.get('xba', 0) >= 0.28 %}stat-hi{% endif %}">{{ "%.3f"|format(pdict.get('xba', 0)) }}</td>
+          <td class="mono">{{ "%.3f"|format(pdict.get('xwoba', 0)) }}</td>
+          <td class="mono">{{ "%.1f"|format(pdict.get('hard_hit_pct', 0) * 100) }}%</td>
+          <td class="mono">{{ "%.1f"|format(pdict.get('sweet_spot_pct', 0) * 100) }}%</td>
+          <td class="mono">{{ "%.1f"|format(pdict.get('barrel_pct', 0) * 100) }}%</td>
+          <td class="mono {% if pdict.get('whiff_pct', 1) <= 0.18 %}stat-blue{% endif %}">
+            {{ "%.1f"|format(pdict.get('whiff_pct', 0) * 100) }}%
+          </td>
+          <td class="mono">{{ "%.1f"|format(pdict.get('avg_exit_velo', 0)) }}</td>
+          <td>
+            <div class="prob-bar-wrap">
+              <div class="prob-bar" style="width: {{ (prob * 100)|round|int }}%"></div>
+              <span class="prob-label mono">{{ "%.1f"|format(prob * 100) }}%</span>
+            </div>
+          </td>
+          <td><span class="verdict-badge badge-{{ verdict|lower }}">{{ verdict }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    {% if not model.get('lineups_confirmed') %}Lineups not yet posted — check back closer to first pitch.{% else %}No hit probability data available.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ════════════════════════════════════════════════
+     TAB 3 — HOME RUNS
+════════════════════════════════════════════════ -->
+<div id="tab-hrs" class="tab-content">
+  {% if model.get('hr_probabilities') %}
+  <div class="hr-grid">
+    {% for r in model.hr_probabilities %}
+    {% set p = r.player if r is not mapping else r.get('player', {}) %}
+    {% set g = r.game if r is not mapping else r.get('game', {}) %}
+    {% set vp = r.vs_pitcher if r is not mapping else r.get('vs_pitcher', {}) %}
+    {% set prob = r.hr_probability if r is not mapping else r.get('hr_probability', 0) %}
+    {% set verdict = r.hr_verdict if r is not mapping else r.get('hr_verdict', 'NO') %}
+    {% set odds_str = r.odds if r is not mapping else r.get('odds', '') %}
+    {% set edge = r.value_edge if r is not mapping else r.get('value_edge', 0) %}
+
+    {% set pdict = p if p is mapping else p.__dict__ if hasattr(p, '__dict__') else {} %}
+    {% set gdict = g if g is mapping else g.__dict__ if hasattr(g, '__dict__') else {} %}
+    {% set vpdict = vp if vp is mapping else vp.__dict__ if hasattr(vp, '__dict__') else {} %}
+
+    <div class="hr-card {% if verdict == 'YES' %}hr-card-yes{% endif %}">
+      <div class="hr-card-header">
+        <img src="{{ pdict.get('player_id', 0) | mlb_photo }}" class="hr-headshot" alt="{{ pdict.get('name', '') }}" onerror="this.src='https://img.mlb.com/headshots/current/60x60/generic@2x.jpg'" />
+        <div>
+          <span class="hr-player-name">{{ pdict.get('name', '') }}</span>
+          <span class="hr-team">{{ pdict.get('team', '') }}</span>
+        </div>
+      </div>
+      <div class="hr-game-info">
+        {{ gdict.get('away_team', {}).get('abbreviation', '') }}
+        @
+        {{ gdict.get('home_team', {}).get('abbreviation', '') }}
+        vs {{ vpdict.get('name', '') }}
+      </div>
+
+      <div class="hr-stat-grid">
+        <div class="hr-stat">
+          <span class="hr-stat-label">Barrel%</span>
+          <span class="hr-stat-val mono">{{ "%.1f"|format(pdict.get('barrel_pct', 0) * 100) }}%</span>
+        </div>
+        <div class="hr-stat">
+          <span class="hr-stat-label">Exit Velo</span>
+          <span class="hr-stat-val mono">{{ "%.1f"|format(pdict.get('avg_exit_velo', 0)) }}</span>
+        </div>
+        <div class="hr-stat">
+          <span class="hr-stat-label">EV50</span>
+          <span class="hr-stat-val mono">{{ "%.1f"|format(pdict.get('ev50', 0)) }}</span>
+        </div>
+        <div class="hr-stat">
+          <span class="hr-stat-label">xwOBA</span>
+          <span class="hr-stat-val mono">{{ "%.3f"|format(pdict.get('xwoba', 0)) }}</span>
+        </div>
+        <div class="hr-stat">
+          <span class="hr-stat-label">HR/Game%</span>
+          <span class="hr-stat-val mono">{{ "%.1f"|format(pdict.get('hr_per_game', 0) * 100) }}%</span>
+        </div>
+        <div class="hr-stat">
+          <span class="hr-stat-label">Sweet Spot%</span>
+          <span class="hr-stat-val mono">{{ "%.1f"|format(pdict.get('sweet_spot_pct', 0) * 100) }}%</span>
+        </div>
+      </div>
+
+      <div class="hr-prob-row">
+        <div class="prob-circle prob-circle-red">
+          <span class="prob-circle-val">{{ "%.1f"|format(prob * 100) }}%</span>
+          <span class="prob-circle-lbl">HR PROB</span>
+        </div>
+        <div class="hr-verdict-col">
+          <span class="verdict-badge badge-{{ verdict|lower }}">{{ verdict }}</span>
+          {% if odds_str %}
+          <span class="odds-badge">{{ odds_str }}</span>
+          {% if edge and edge > 0 %}
+          <span class="edge-badge">+{{ "%.1f"|format(edge * 100) }}% edge</span>
+          {% endif %}
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    {% if not model.get('lineups_confirmed') %}Lineups not yet posted.{% else %}No HR probability data available.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ════════════════════════════════════════════════
+     TAB 4 — LIVE SCORES
+════════════════════════════════════════════════ -->
+<div id="tab-live" class="tab-content">
+  <div class="live-header">
+    <span class="live-dot"></span>
+    <span>Auto-refreshes every 30 seconds</span>
+  </div>
+  <div id="live-scores-container">
+    <div class="empty-state">Loading live scores…</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Auto-refresh lineups check every 5 minutes if not confirmed
+  {% if not model.get('lineups_confirmed') %}
+  setTimeout(() => location.reload(), 5 * 60 * 1000);
+  {% endif %}
+</script>
+{% endblock %}

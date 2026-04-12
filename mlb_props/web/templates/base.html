@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}MLB Props Model{% endblock %}</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap" rel="stylesheet" />
+
+  <!-- D3 & Chart.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+  <!-- App CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <span class="brand-title">MLB PROPS MODEL</span>
+        <span class="brand-sub">Statcast-Powered Analysis</span>
+      </div>
+      <div class="header-right">
+        <span class="date-badge">{{ current_date }}</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Navigation ── -->
+  <nav class="site-nav">
+    <div class="nav-inner">
+      <div class="nav-links">
+        <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Today</a>
+        <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">Historical</a>
+      </div>
+      <form class="search-form" action="#" onsubmit="navigateToPlayer(event)">
+        <input
+          type="text"
+          id="player-search-nav"
+          class="search-input"
+          placeholder="Search player..."
+          autocomplete="off"
+        />
+        <button type="submit" class="search-btn">Go</button>
+      </form>
+    </div>
+  </nav>
+
+  <!-- ── Main content ── -->
+  <main class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer class="site-footer">
+    <span>MLB Props Model v{{ app_version }}</span>
+    <span class="muted">Data: Baseball Savant · MLB Stats API · FanGraphs · Open-Meteo</span>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="{{ url_for('static', filename='js/strike_zone.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/live.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block extra_js %}{% endblock %}
+
+  <script>
+    function navigateToPlayer(e) {
+      e.preventDefault();
+      const name = document.getElementById('player-search-nav').value.trim();
+      if (name) window.location.href = '/player/' + encodeURIComponent(name);
+    }
+  </script>
+
+</body>
+</html>

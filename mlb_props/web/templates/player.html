@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}{{ player_name }} — Career Stats{% endblock %}
+
+{% block content %}
+<div class="page-header" style="gap:1rem;">
+  {% if seasons %}
+  <img src="{{ seasons[-1].season | string | mlb_photo if false else (seasons | map(attribute='season') | first | string) }}"
+       id="player-hero-photo"
+       class="player-hero-photo"
+       alt="{{ player_name }}"
+       onerror="this.style.display='none'" />
+  {% endif %}
+  <h1 class="page-title">{{ player_name | upper }}</h1>
+</div>
+
+{% if seasons %}
+{% set latest = seasons[-1] %}
+
+<!-- ── 2026 highlight stats ── -->
+<div class="section-card">
+  <h2 class="section-title">{{ latest.season }} Season</h2>
+  <div class="highlight-stats-grid">
+    <div class="hs-card">
+      <span class="hs-label">AVG</span>
+      <span class="hs-val mono">{{ "%.3f"|format(latest.avg) }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">xBA</span>
+      <span class="hs-val mono">{{ "%.3f"|format(latest.xba) }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">xwOBA</span>
+      <span class="hs-val mono">{{ "%.3f"|format(latest.xwoba) }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">HR</span>
+      <span class="hs-val mono">{{ latest.hr }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">OPS</span>
+      <span class="hs-val mono">{{ "%.3f"|format(latest.ops) }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">Barrel%</span>
+      <span class="hs-val mono">{{ "%.1f"|format(latest.barrel_pct * 100) }}%</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">Hard Hit%</span>
+      <span class="hs-val mono">{{ "%.1f"|format(latest.hard_hit_pct * 100) }}%</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">Exit Velo</span>
+      <span class="hs-val mono">{{ "%.1f"|format(latest.avg_exit_velo) }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">EV50</span>
+      <span class="hs-val mono">{{ "%.1f"|format(latest.ev50) }}</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Career table ── -->
+<div class="section-card">
+  <h2 class="section-title">Career Stats</h2>
+  <div class="table-wrap">
+    <table class="data-table" id="career-table">
+      <thead>
+        <tr>
+          <th onclick="sortTable('career-table',0)">Season</th>
+          <th onclick="sortTable('career-table',1)">Team</th>
+          <th onclick="sortTable('career-table',2)">G</th>
+          <th onclick="sortTable('career-table',3)">PA</th>
+          <th onclick="sortTable('career-table',4)">AVG</th>
+          <th onclick="sortTable('career-table',5)">HR</th>
+          <th onclick="sortTable('career-table',6)">RBI</th>
+          <th onclick="sortTable('career-table',7)">OPS</th>
+          <th onclick="sortTable('career-table',8)">xBA</th>
+          <th onclick="sortTable('career-table',9)">xwOBA</th>
+          <th onclick="sortTable('career-table',10)">Barrel%</th>
+          <th onclick="sortTable('career-table',11)">Hard Hit%</th>
+          <th onclick="sortTable('career-table',12)">Sweet Spot%</th>
+          <th onclick="sortTable('career-table',13)">EV50</th>
+          <th onclick="sortTable('career-table',14)">Whiff%</th>
+          <th onclick="sortTable('career-table',15)">WAR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in seasons %}
+        <tr>
+          <td class="mono">{{ s.season }}</td>
+          <td>{{ s.team }}</td>
+          <td class="mono">{{ s.games }}</td>
+          <td class="mono">{{ s.pa }}</td>
+          <td class="mono">{{ "%.3f"|format(s.avg) }}</td>
+          <td class="mono">{{ s.hr }}</td>
+          <td class="mono">{{ s.rbi }}</td>
+          <td class="mono">{{ "%.3f"|format(s.ops) }}</td>
+          <td class="mono accent">{{ "%.3f"|format(s.xba) }}</td>
+          <td class="mono accent">{{ "%.3f"|format(s.xwoba) }}</td>
+          <td class="mono">{{ "%.1f"|format(s.barrel_pct * 100) }}%</td>
+          <td class="mono">{{ "%.1f"|format(s.hard_hit_pct * 100) }}%</td>
+          <td class="mono">{{ "%.1f"|format(s.sweet_spot_pct * 100) }}%</td>
+          <td class="mono">{{ "%.1f"|format(s.ev50) }}</td>
+          <td class="mono">{{ "%.1f"|format(s.whiff_pct * 100) }}%</td>
+          <td class="mono">{{ "%.1f"|format(s.war) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Trends chart ── -->
+<div class="section-card">
+  <h2 class="section-title">Trends</h2>
+  <div class="chart-wrap">
+    <canvas id="trends-chart" height="120"></canvas>
+  </div>
+</div>
+
+{% else %}
+<div class="empty-state">No career data found for "{{ player_name }}".</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if seasons %}
+<script>
+(function() {
+  const labels  = {{ seasons | map(attribute='season') | list | tojson }};
+  const xba     = {{ seasons | map(attribute='xba') | list | tojson }};
+  const barrels = {{ seasons | map(attribute='barrel_pct') | list | tojson }};
+  const hardHit = {{ seasons | map(attribute='hard_hit_pct') | list | tojson }};
+  const xwoba   = {{ seasons | map(attribute='xwoba') | list | tojson }};
+
+  new Chart(document.getElementById('trends-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'xBA',      data: xba,     borderColor: '#e8ff00', tension: 0.3, pointRadius: 3 },
+        { label: 'Barrel%',  data: barrels, borderColor: '#ff4d4d', tension: 0.3, pointRadius: 3 },
+        { label: 'Hard Hit%',data: hardHit, borderColor: '#00d4ff', tension: 0.3, pointRadius: 3 },
+        { label: 'xwOBA',    data: xwoba,   borderColor: '#00e878', tension: 0.3, pointRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#e8eaf0', font: { family: 'DM Mono' } } } },
+      scales: {
+        x: { ticks: { color: '#5a6070' }, grid: { color: '#1e2230' } },
+        y: { ticks: { color: '#5a6070' }, grid: { color: '#1e2230' } }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

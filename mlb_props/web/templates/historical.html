@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Historical Data{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">HISTORICAL DATA</h1>
+</div>
+
+<!-- ── Section 1: Player Search ── -->
+<div class="section-card">
+  <h2 class="section-title">Player Career Search</h2>
+  <div class="hist-controls">
+    <input type="text" id="hist-player-name" class="search-input" placeholder="Player name…" />
+    <select id="hist-start-year" class="select-input">
+      {% for y in range(2015, current_date[:4]|int + 1) %}
+      <option value="{{ y }}" {% if y == 2015 %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <span class="muted">to</span>
+    <select id="hist-end-year" class="select-input">
+      {% for y in range(2015, current_date[:4]|int + 1) %}
+      <option value="{{ y }}" {% if loop.last %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn-primary" onclick="loadPlayerHistory()">Load</button>
+  </div>
+  <div id="hist-player-result"></div>
+</div>
+
+<!-- ── Section 2: All-Time Leaders ── -->
+<div class="section-card">
+  <h2 class="section-title">All-Time Leaders</h2>
+  <div class="hist-controls">
+    <select id="leaders-stat" class="select-input">
+      <option value="HR">Home Runs</option>
+      <option value="AVG">Batting Average</option>
+      <option value="OPS">OPS</option>
+      <option value="WAR">WAR</option>
+      <option value="xwOBA">xwOBA</option>
+      <option value="barrel_pct">Barrel%</option>
+      <option value="hard_hit_pct">Hard Hit%</option>
+      <option value="exit_velocity">Exit Velocity</option>
+    </select>
+    <select id="leaders-start-year" class="select-input">
+      {% for y in range(2015, current_date[:4]|int + 1) %}
+      <option value="{{ y }}" {% if y == 2015 %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <span class="muted">to</span>
+    <select id="leaders-end-year" class="select-input">
+      {% for y in range(2015, current_date[:4]|int + 1) %}
+      <option value="{{ y }}" {% if loop.last %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <select id="leaders-top-n" class="select-input">
+      <option value="10">Top 10</option>
+      <option value="25" selected>Top 25</option>
+      <option value="50">Top 50</option>
+    </select>
+    <button class="btn-primary" onclick="loadLeaders()">Load</button>
+  </div>
+  <div id="leaders-result"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function loadPlayerHistory() {
+  const name  = document.getElementById('hist-player-name').value.trim();
+  const start = document.getElementById('hist-start-year').value;
+  const end   = document.getElementById('hist-end-year').value;
+  if (!name) return;
+  const el = document.getElementById('hist-player-result');
+  el.innerHTML = '<div class="empty-state">Loading…</div>';
+  fetch(`/api/historical?player=${encodeURIComponent(name)}&start_year=${start}&end_year=${end}`)
+    .then(r => r.json())
+    .then(seasons => {
+      if (!seasons.length) { el.innerHTML = '<div class="empty-state">No data found.</div>'; return; }
+      el.innerHTML = buildCareerTable(seasons);
+    })
+    .catch(() => { el.innerHTML = '<div class="empty-state">Error loading data.</div>'; });
+}
+
+function loadLeaders() {
+  const stat  = document.getElementById('leaders-stat').value;
+  const start = document.getElementById('leaders-start-year').value;
+  const end   = document.getElementById('leaders-end-year').value;
+  const topN  = document.getElementById('leaders-top-n').value;
+  const el    = document.getElementById('leaders-result');
+  el.innerHTML = '<div class="empty-state">Loading…</div>';
+  fetch(`/api/leaders?stat=${stat}&start_year=${start}&end_year=${end}&top_n=${topN}`)
+    .then(r => r.json())
+    .then(rows => {
+      if (!rows.length) { el.innerHTML = '<div class="empty-state">No data found.</div>'; return; }
+      let html = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Value</th></tr></thead><tbody>';
+      rows.forEach(r => {
+        html += `<tr><td class="mono">${r.rank}</td><td>${r.player}</td><td>${r.team}</td><td class="mono accent">${r.value}</td></tr>`;
+      });
+      html += '</tbody></table></div>';
+      el.innerHTML = html;
+    })
+    .catch(() => { el.innerHTML = '<div class="empty-state">Error loading data.</div>'; });
+}
+
+function buildCareerTable(seasons) {
+  let html = '<div class="table-wrap"><table class="data-table"><thead><tr>';
+  const cols = ['Season','Team','G','PA','AVG','HR','RBI','OPS','xBA','xwOBA','Barrel%','Hard Hit%','Sweet Spot%','EV50','Whiff%','WAR'];
+  cols.forEach(c => { html += `<th>${c}</th>`; });
+  html += '</tr></thead><tbody>';
+  seasons.forEach(s => {
+    html += `<tr>
+      <td class="mono">${s.season}</td>
+      <td>${s.team}</td>
+      <td class="mono">${s.games}</td>
+      <td class="mono">${s.pa}</td>
+      <td class="mono">${s.avg.toFixed(3)}</td>
+      <td class="mono">${s.hr}</td>
+      <td class="mono">${s.rbi}</td>
+      <td class="mono">${s.ops.toFixed(3)}</td>
+      <td class="mono accent">${s.xba.toFixed(3)}</td>
+      <td class="mono accent">${s.xwoba.toFixed(3)}</td>
+      <td class="mono">${(s.barrel_pct*100).toFixed(1)}%</td>
+      <td class="mono">${(s.hard_hit_pct*100).toFixed(1)}%</td>
+      <td class="mono">${(s.sweet_spot_pct*100).toFixed(1)}%</td>
+      <td class="mono">${s.ev50.toFixed(1)}</td>
+      <td class="mono">${(s.whiff_pct*100).toFixed(1)}%</td>
+      <td class="mono">${s.war.toFixed(1)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+</script>
+{% endblock %}

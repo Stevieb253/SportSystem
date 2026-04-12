@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Game Detail{% endblock %}
+
+{% block content %}
+{% if not game %}
+<div class="empty-state">Game not found.</div>
+{% else %}
+
+{% set gdict = game if game is mapping else game.__dict__ if hasattr(game, '__dict__') else {} %}
+{% set home = gdict.get('home_team', {}) %}
+{% set away = gdict.get('away_team', {}) %}
+{% set hp   = gdict.get('home_pitcher', {}) %}
+{% set ap   = gdict.get('away_pitcher', {}) %}
+{% set w    = gdict.get('weather', {}) %}
+{% set v    = gdict.get('venue', {}) %}
+
+<!-- ── Matchup header ── -->
+<div class="game-hero">
+  <div class="game-hero-inner">
+    <div class="team-block">
+      <span class="team-abbr">{{ away.get('abbreviation','') }}</span>
+      <span class="team-full">{{ away.get('name','') }}</span>
+    </div>
+    <div class="game-center">
+      <span class="at-large">@</span>
+      <div class="game-meta-center">
+        <span class="venue-label">{{ v.get('name','') }}</span>
+        <span class="game-time-label">{{ gdict.get('game_time_local','')[:16]|replace('T',' ') }}</span>
+        <span class="status-pill status-{{ gdict.get('status','scheduled') }}">{{ gdict.get('status','scheduled')|upper }}</span>
+      </div>
+    </div>
+    <div class="team-block team-block-right">
+      <span class="team-abbr">{{ home.get('abbreviation','') }}</span>
+      <span class="team-full">{{ home.get('name','') }}</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Weather ── -->
+<div class="section-card">
+  <h2 class="section-title">Weather</h2>
+  {% if w.get('is_dome') %}
+  <p class="dome-note">Indoor stadium — weather has no impact on the game.</p>
+  {% else %}
+  <div class="weather-detail-row">
+    <div class="weather-detail-item">
+      <span class="wd-label">Condition</span>
+      <span class="wd-val wx-condition-lg">{{ w.get('condition_text', 'Unknown') }}</span>
+    </div>
+    <div class="weather-detail-item">
+      <span class="wd-label">Temp</span>
+      <span class="wd-val mono">{{ w.get('temp_f',72)|round|int }}°F</span>
+    </div>
+    <div class="weather-detail-item">
+      <span class="wd-label">Wind</span>
+      <span class="wd-val mono">{{ w.get('wind_speed_mph',0)|round|int }} mph @ {{ w.get('wind_direction_deg',0)|round|int }}°</span>
+    </div>
+    <div class="weather-detail-item">
+      <span class="wd-label">Cloud Cover</span>
+      <span class="wd-val mono">{{ w.get('cloud_cover_pct',0) }}%</span>
+    </div>
+    {% if w.get('precipitation_mm', 0) > 0 %}
+    <div class="weather-detail-item">
+      <span class="wd-label">Precipitation</span>
+      <span class="wd-val mono wx-rain">{{ "%.1f"|format(w.get('precipitation_mm',0)) }} mm</span>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Pitching matchup ── -->
+<div class="section-card">
+  <h2 class="section-title">Pitching Matchup</h2>
+  <div class="pitching-matchup-grid">
+    {% for side, pitcher, label in [('away', ap, away.get('abbreviation','')), ('home', hp, home.get('abbreviation',''))] %}
+    <div class="pitcher-detail-card">
+      <div class="pdc-header">
+        <span class="pdc-side">{{ label }}</span>
+        <span class="pdc-name">{{ pitcher.get('name','TBD') }}</span>
+        <span class="pdc-hand">{{ pitcher.get('hand','R') }}HP</span>
+      </div>
+      <div class="pdc-stats">
+        <div class="pdc-stat"><span>ERA</span><span class="mono">{{ "%.2f"|format(pitcher.get('era',0)) }}</span></div>
+        <div class="pdc-stat"><span>xERA</span><span class="mono accent">{{ "%.2f"|format(pitcher.get('xera',0)) }}</span></div>
+        <div class="pdc-stat"><span>K%</span><span class="mono">{{ "%.1f"|format(pitcher.get('k_pct',0)*100) }}%</span></div>
+        <div class="pdc-stat"><span>BB%</span><span class="mono">{{ "%.1f"|format(pitcher.get('bb_pct',0)*100) }}%</span></div>
+        <div class="pdc-stat"><span>HR/9</span><span class="mono">{{ "%.2f"|format(pitcher.get('hr9',0)) }}</span></div>
+        <div class="pdc-stat"><span>WHIP</span><span class="mono">{{ "%.2f"|format(pitcher.get('whip',0)) }}</span></div>
+        <div class="pdc-stat"><span>Hard Hit% Allowed</span><span class="mono">{{ "%.1f"|format(pitcher.get('hard_hit_pct_allowed',0)*100) }}%</span></div>
+        <div class="pdc-stat"><span>Barrel% Allowed</span><span class="mono">{{ "%.1f"|format(pitcher.get('barrel_pct_allowed',0)*100) }}%</span></div>
+        <div class="pdc-stat"><span>xwOBA Allowed</span><span class="mono">{{ "%.3f"|format(pitcher.get('xwoba_allowed',0)) }}</span></div>
+        <div class="pdc-stat"><span>Whiff% Gen.</span><span class="mono">{{ "%.1f"|format(pitcher.get('whiff_pct_generated',0)*100) }}%</span></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ── Lineups ── -->
+<div class="section-card">
+  <h2 class="section-title">Lineups &amp; Probabilities</h2>
+  {% if hit_results %}
+  <div class="lineup-split">
+    {% set away_results = hit_results | selectattr('player.team', 'equalto', away.get('abbreviation','')) | list %}
+    {% set home_results = hit_results | selectattr('player.team', 'equalto', home.get('abbreviation','')) | list %}
+
+    {% for team_results, team_label in [(away_results, away.get('abbreviation','')), (home_results, home.get('abbreviation',''))] %}
+    <div class="lineup-side">
+      <h3 class="lineup-team-label">{{ team_label }}</h3>
+      {% for r in team_results | sort(attribute='player.lineup_position') %}
+      {% set p = r.player if r is not mapping else r.get('player', {}) %}
+      {% set pdict = p if p is mapping else p.__dict__ if hasattr(p, '__dict__') else {} %}
+      {% set hit_prob = r.hit_probability if r is not mapping else r.get('hit_probability', 0) %}
+      {% set verdict  = r.hit_verdict if r is not mapping else r.get('hit_verdict', 'NO') %}
+
+      {% set hr_result = hr_results | selectattr('player.player_id', 'equalto', pdict.get('player_id',0)) | first | default(none) %}
+      {% set hr_prob = hr_result.hr_probability if hr_result and hr_result is not mapping else (hr_result.get('hr_probability',0) if hr_result else 0) %}
+
+      <div class="lineup-row verdict-{{ verdict|lower }}">
+        <span class="lineup-pos mono">{{ pdict.get('lineup_position','') }}</span>
+        <div class="lineup-player-info">
+          <span class="lineup-name">{{ pdict.get('name','') }}</span>
+          <span class="lineup-hand muted">{{ pdict.get('hand','') }}</span>
+        </div>
+        <div class="lineup-stats">
+          <span class="mono" title="AVG">{{ "%.3f"|format(pdict.get('avg',0)) }}</span>
+          <span class="mono accent" title="xBA">{{ "%.3f"|format(pdict.get('xba',0)) }}</span>
+          <span class="mono" title="Barrel%">{{ "%.1f"|format(pdict.get('barrel_pct',0)*100) }}%</span>
+        </div>
+        <div class="lineup-probs">
+          <div class="mini-prob-bar">
+            <div class="mini-bar-fill" style="width:{{ (hit_prob*100)|round|int }}%"></div>
+            <span class="mini-prob-label mono">{{ "%.0f"|format(hit_prob*100) }}%</span>
+          </div>
+          <span class="hr-mini-prob muted mono">HR {{ "%.1f"|format(hr_prob*100) }}%</span>
+        </div>
+        <span class="verdict-badge badge-{{ verdict|lower }} verdict-sm">{{ verdict }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">Lineups not yet posted.</div>
+  {% endif %}
+</div>
+
+<!-- ── Live section (shown when game is live) ── -->
+{% if gdict.get('status') == 'live' %}
+<div class="section-card" id="live-section">
+  <h2 class="section-title">
+    <span class="live-dot"></span> Live
+  </h2>
+  <div class="live-score-big">
+    <span>{{ away.get('abbreviation','') }} {{ gdict.get('away_score',0) }}</span>
+    <span class="muted">—</span>
+    <span>{{ home.get('abbreviation','') }} {{ gdict.get('home_score',0) }}</span>
+    <span class="inning-label muted">Inn {{ gdict.get('inning',0) }} {{ gdict.get('inning_half','') }}</span>
+  </div>
+  <div id="pitch-log-container">
+    <table class="data-table" id="pitch-log-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Type</th><th>Speed</th><th>Zone</th><th>Result</th><th>Count</th>
+        </tr>
+      </thead>
+      <tbody id="pitch-log-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if gdict is defined and gdict.get('status') == 'live' %}
+<script>
+  (function() {
+    const GAME_PK = {{ gdict.get('game_pk', 0) }};
+    function refreshPitches() {
+      fetch('/api/live/game/' + GAME_PK)
+        .then(r => r.json())
+        .then(data => {
+          const tbody = document.getElementById('pitch-log-body');
+          if (!tbody) return;
+          tbody.innerHTML = '';
+          (data.pitches || []).forEach(p => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td class="mono">${p.pitch_number}</td>
+              <td>${p.pitch_type}</td>
+              <td class="mono">${p.speed}</td>
+              <td class="mono">${p.zone}</td>
+              <td>${p.description}</td>
+              <td class="mono">${p.balls}-${p.strikes}</td>`;
+            tbody.appendChild(tr);
+          });
+        })
+        .catch(() => {});
+    }
+    refreshPitches();
+    setInterval(refreshPitches, 30000);
+  })();
+</script>
+{% endif %}
+{% endblock %}
