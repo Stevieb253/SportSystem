@@ -1,65 +1,150 @@
 {% extends "base.html" %}
-{% block title %}{{ player_name }} — Career Stats{% endblock %}
+{% block title %}{{ player_name }} — Player Profile{% endblock %}
 
 {% block content %}
-<div class="page-header" style="gap:1rem;">
-  {% if seasons %}
-  <img src="{{ seasons[-1].season | string | mlb_photo if false else (seasons | map(attribute='season') | first | string) }}"
-       id="player-hero-photo"
-       class="player-hero-photo"
-       alt="{{ player_name }}"
-       onerror="this.style.display='none'" />
+
+{# ── helpers ── #}
+{% set pid  = player_id | default(0) | int %}
+{% set bm   = batter_metrics or {} %}
+{% set raw  = mlb_raw_seasons or [] %}
+{% set cur  = raw[-1] if raw else {} %}
+
+{# ── Page header ── #}
+<div class="player-header">
+  {% if pid %}
+  <div class="player-hero-wrap">
+    <img
+      id="player-hero-img"
+      src="https://securea.mlb.com/mlb/images/players/head_shot/{{ pid }}.jpg"
+      class="player-hero-photo"
+      alt="{{ player_name }}"
+      onerror="this.src=''; this.style.display='none'"
+    />
+  </div>
   {% endif %}
-  <h1 class="page-title">{{ player_name | upper }}</h1>
-</div>
-
-{% if seasons %}
-{% set latest = seasons[-1] %}
-
-<!-- ── 2026 highlight stats ── -->
-<div class="section-card">
-  <h2 class="section-title">{{ latest.season }} Season</h2>
-  <div class="highlight-stats-grid">
-    <div class="hs-card">
-      <span class="hs-label">AVG</span>
-      <span class="hs-val mono">{{ "%.3f"|format(latest.avg) }}</span>
+  <div class="player-hero-info">
+    <h1 class="page-title">{{ player_name | upper }}</h1>
+    {% if bm %}
+    <div class="player-meta-row">
+      {% if bm.get('team') %}<span class="player-meta-tag">{{ bm.team }}</span>{% endif %}
+      {% if bm.get('hand') %}<span class="player-meta-tag">Bats {{ bm.hand }}</span>{% endif %}
+      {% if cur.get('avg') %}<span class="player-meta-tag">{{ cur.season }} AVG .{{ "%03d"|format((cur.avg * 1000)|int) }}</span>{% endif %}
     </div>
-    <div class="hs-card accent-card">
-      <span class="hs-label">xBA</span>
-      <span class="hs-val mono">{{ "%.3f"|format(latest.xba) }}</span>
+    {% elif cur %}
+    <div class="player-meta-row">
+      {% if cur.get('team') %}<span class="player-meta-tag">{{ cur.team }}</span>{% endif %}
     </div>
-    <div class="hs-card accent-card">
-      <span class="hs-label">xwOBA</span>
-      <span class="hs-val mono">{{ "%.3f"|format(latest.xwoba) }}</span>
-    </div>
-    <div class="hs-card">
-      <span class="hs-label">HR</span>
-      <span class="hs-val mono">{{ latest.hr }}</span>
-    </div>
-    <div class="hs-card">
-      <span class="hs-label">OPS</span>
-      <span class="hs-val mono">{{ "%.3f"|format(latest.ops) }}</span>
-    </div>
-    <div class="hs-card accent-card">
-      <span class="hs-label">Barrel%</span>
-      <span class="hs-val mono">{{ "%.1f"|format(latest.barrel_pct * 100) }}%</span>
-    </div>
-    <div class="hs-card accent-card">
-      <span class="hs-label">Hard Hit%</span>
-      <span class="hs-val mono">{{ "%.1f"|format(latest.hard_hit_pct * 100) }}%</span>
-    </div>
-    <div class="hs-card accent-card">
-      <span class="hs-label">Exit Velo</span>
-      <span class="hs-val mono">{{ "%.1f"|format(latest.avg_exit_velo) }}</span>
-    </div>
-    <div class="hs-card accent-card">
-      <span class="hs-label">EV50</span>
-      <span class="hs-val mono">{{ "%.1f"|format(latest.ev50) }}</span>
-    </div>
+    {% endif %}
   </div>
 </div>
 
-<!-- ── Career table ── -->
+{% if not raw and not bm %}
+{# ── Not found state ── #}
+<div class="empty-state">
+  <div class="es-icon">⚾</div>
+  <p class="es-title">Player not found</p>
+  <p class="es-sub">
+    "{{ player_name }}" wasn't found in today's lineups or the MLB database.
+    Try searching by full name (e.g. "Shohei Ohtani").
+  </p>
+</div>
+
+{% else %}
+
+{# ── Current season Statcast card ── #}
+{% if bm %}
+<div class="section-card">
+  <h2 class="section-title">{{ cur.get('season', 2026) }} Season — Statcast Metrics</h2>
+  {# macro: show value or em-dash when zero/missing #}
+  {% macro sv(val, fmt, suffix='') %}
+    {%- if val %}{{ fmt|format(val) }}{{ suffix }}{% else %}<span class="hs-na">—</span>{% endif -%}
+  {% endmacro %}
+
+  <div class="highlight-stats-grid">
+    <div class="hs-card accent-card">
+      <span class="hs-label">xBA</span>
+      <span class="hs-val mono">{{ sv(bm.get('xba'), "%.3f") }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">xwOBA</span>
+      <span class="hs-val mono">{{ sv(bm.get('xwoba'), "%.3f") }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">Barrel%</span>
+      <span class="hs-val mono">{{ sv(bm.get('barrel_pct'), "%.1f", "%") if bm.get('barrel_pct') else sv(0, "%.1f") }}</span>
+    </div>
+    <div class="hs-card accent-card">
+      <span class="hs-label">Hard Hit%</span>
+      <span class="hs-val mono">
+        {%- set hh = bm.get('hard_hit_pct', 0) -%}
+        {%- if hh %}{{ "%.1f"|format(hh * 100) }}%{% else %}<span class="hs-na">—</span>{% endif -%}
+      </span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">Exit Velo</span>
+      <span class="hs-val mono">{{ sv(bm.get('avg_exit_velo'), "%.1f") }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">EV50</span>
+      <span class="hs-val mono">{{ sv(bm.get('ev50'), "%.1f") }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">Whiff%</span>
+      <span class="hs-val mono">
+        {%- set wh = bm.get('whiff_pct', 0) -%}
+        {%- if wh %}{{ "%.1f"|format(wh * 100) }}%{% else %}<span class="hs-na">—</span>{% endif -%}
+      </span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">Sweet Spot%</span>
+      <span class="hs-val mono">
+        {%- set ss = bm.get('sweet_spot_pct', 0) -%}
+        {%- if ss %}{{ "%.1f"|format(ss * 100) }}%{% else %}<span class="hs-na">—</span>{% endif -%}
+      </span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">AVG</span>
+      <span class="hs-val mono">{{ "%.3f"|format((bm.get('avg') or cur.get('avg')) or 0) }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">OBP</span>
+      <span class="hs-val mono">{{ "%.3f"|format(cur.get('obp') or 0) }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">SLG</span>
+      <span class="hs-val mono">{{ "%.3f"|format(cur.get('slg') or 0) }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">OPS</span>
+      <span class="hs-val mono">{{ "%.3f"|format((bm.get('ops') or cur.get('ops')) or 0) }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">HR</span>
+      <span class="hs-val mono">{{ (bm.get('hr_count') or cur.get('hr')) or 0 }}</span>
+    </div>
+    <div class="hs-card">
+      <span class="hs-label">PA</span>
+      <span class="hs-val mono">{{ (bm.get('pa') or cur.get('pa')) or 0 }}</span>
+    </div>
+  </div>
+</div>
+{% elif cur %}
+{# Only have traditional stats for current year #}
+<div class="section-card">
+  <h2 class="section-title">{{ cur.season }} Season</h2>
+  <div class="highlight-stats-grid">
+    <div class="hs-card"><span class="hs-label">AVG</span><span class="hs-val mono">{{ "%.3f"|format(cur.avg) }}</span></div>
+    <div class="hs-card"><span class="hs-label">OPS</span><span class="hs-val mono">{{ "%.3f"|format(cur.ops) }}</span></div>
+    <div class="hs-card"><span class="hs-label">HR</span><span class="hs-val mono">{{ cur.hr }}</span></div>
+    <div class="hs-card"><span class="hs-label">RBI</span><span class="hs-val mono">{{ cur.rbi }}</span></div>
+    <div class="hs-card"><span class="hs-label">G</span><span class="hs-val mono">{{ cur.games }}</span></div>
+    <div class="hs-card"><span class="hs-label">PA</span><span class="hs-val mono">{{ cur.pa }}</span></div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Career table (MLB API — traditional stats) ── #}
+{% if raw %}
 <div class="section-card">
   <h2 class="section-title">Career Stats</h2>
   <div class="table-wrap">
@@ -70,86 +155,114 @@
           <th onclick="sortTable('career-table',1)">Team</th>
           <th onclick="sortTable('career-table',2)">G</th>
           <th onclick="sortTable('career-table',3)">PA</th>
-          <th onclick="sortTable('career-table',4)">AVG</th>
-          <th onclick="sortTable('career-table',5)">HR</th>
-          <th onclick="sortTable('career-table',6)">RBI</th>
-          <th onclick="sortTable('career-table',7)">OPS</th>
-          <th onclick="sortTable('career-table',8)">xBA</th>
-          <th onclick="sortTable('career-table',9)">xwOBA</th>
-          <th onclick="sortTable('career-table',10)">Barrel%</th>
-          <th onclick="sortTable('career-table',11)">Hard Hit%</th>
-          <th onclick="sortTable('career-table',12)">Sweet Spot%</th>
-          <th onclick="sortTable('career-table',13)">EV50</th>
-          <th onclick="sortTable('career-table',14)">Whiff%</th>
-          <th onclick="sortTable('career-table',15)">WAR</th>
+          <th onclick="sortTable('career-table',4)">AB</th>
+          <th onclick="sortTable('career-table',5)">H</th>
+          <th onclick="sortTable('career-table',6)">HR</th>
+          <th onclick="sortTable('career-table',7)">RBI</th>
+          <th onclick="sortTable('career-table',8)">SB</th>
+          <th onclick="sortTable('career-table',9)">BB</th>
+          <th onclick="sortTable('career-table',10)">SO</th>
+          <th onclick="sortTable('career-table',11)">AVG</th>
+          <th onclick="sortTable('career-table',12)">OBP</th>
+          <th onclick="sortTable('career-table',13)">SLG</th>
+          <th onclick="sortTable('career-table',14)">OPS</th>
         </tr>
       </thead>
       <tbody>
-        {% for s in seasons %}
-        <tr>
+        {% for s in raw | sort(attribute='season') %}
+        <tr{% if loop.last %} class="career-row-latest"{% endif %}>
           <td class="mono">{{ s.season }}</td>
           <td>{{ s.team }}</td>
           <td class="mono">{{ s.games }}</td>
           <td class="mono">{{ s.pa }}</td>
-          <td class="mono">{{ "%.3f"|format(s.avg) }}</td>
+          <td class="mono">{{ s.ab }}</td>
+          <td class="mono">{{ s.hits }}</td>
           <td class="mono">{{ s.hr }}</td>
           <td class="mono">{{ s.rbi }}</td>
-          <td class="mono">{{ "%.3f"|format(s.ops) }}</td>
-          <td class="mono accent">{{ "%.3f"|format(s.xba) }}</td>
-          <td class="mono accent">{{ "%.3f"|format(s.xwoba) }}</td>
-          <td class="mono">{{ "%.1f"|format(s.barrel_pct * 100) }}%</td>
-          <td class="mono">{{ "%.1f"|format(s.hard_hit_pct * 100) }}%</td>
-          <td class="mono">{{ "%.1f"|format(s.sweet_spot_pct * 100) }}%</td>
-          <td class="mono">{{ "%.1f"|format(s.ev50) }}</td>
-          <td class="mono">{{ "%.1f"|format(s.whiff_pct * 100) }}%</td>
-          <td class="mono">{{ "%.1f"|format(s.war) }}</td>
+          <td class="mono">{{ s.sb }}</td>
+          <td class="mono">{{ s.bb }}</td>
+          <td class="mono">{{ s.so }}</td>
+          <td class="mono{% if s.avg >= 0.280 %} accent{% endif %}">{{ "%.3f"|format(s.avg) }}</td>
+          <td class="mono">{{ "%.3f"|format(s.obp) }}</td>
+          <td class="mono">{{ "%.3f"|format(s.slg) }}</td>
+          <td class="mono{% if s.ops >= 0.800 %} accent{% endif %}">{{ "%.3f"|format(s.ops) }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+{% endif %}
 
-<!-- ── Trends chart ── -->
+{# ── Career trends chart ── #}
+{% if raw | length > 1 %}
 <div class="section-card">
-  <h2 class="section-title">Trends</h2>
+  <h2 class="section-title">Career Trends</h2>
   <div class="chart-wrap">
-    <canvas id="trends-chart" height="120"></canvas>
+    <canvas id="trends-chart" height="110"></canvas>
   </div>
 </div>
-
-{% else %}
-<div class="empty-state">No career data found for "{{ player_name }}".</div>
 {% endif %}
+
+{% endif %}{# end not-found #}
 {% endblock %}
 
 {% block extra_js %}
-{% if seasons %}
+{% if mlb_raw_seasons and mlb_raw_seasons | length > 1 %}
 <script>
 (function() {
-  const labels  = {{ seasons | map(attribute='season') | list | tojson }};
-  const xba     = {{ seasons | map(attribute='xba') | list | tojson }};
-  const barrels = {{ seasons | map(attribute='barrel_pct') | list | tojson }};
-  const hardHit = {{ seasons | map(attribute='hard_hit_pct') | list | tojson }};
-  const xwoba   = {{ seasons | map(attribute='xwoba') | list | tojson }};
+  const raw    = {{ mlb_raw_seasons | tojson }};
+  const labels = raw.map(s => s.season);
+  const avg    = raw.map(s => s.avg);
+  const ops    = raw.map(s => s.ops);
+  const hr     = raw.map(s => s.hr);
+  const so     = raw.map(s => s.so);
 
   new Chart(document.getElementById('trends-chart'), {
     type: 'line',
     data: {
       labels,
       datasets: [
-        { label: 'xBA',      data: xba,     borderColor: '#e8ff00', tension: 0.3, pointRadius: 3 },
-        { label: 'Barrel%',  data: barrels, borderColor: '#ff4d4d', tension: 0.3, pointRadius: 3 },
-        { label: 'Hard Hit%',data: hardHit, borderColor: '#00d4ff', tension: 0.3, pointRadius: 3 },
-        { label: 'xwOBA',    data: xwoba,   borderColor: '#00e878', tension: 0.3, pointRadius: 3 },
+        {
+          label: 'AVG',
+          data: avg,
+          borderColor: '#e8ff00',
+          backgroundColor: 'rgba(232,255,0,0.06)',
+          tension: 0.35,
+          pointRadius: 4,
+          yAxisID: 'y',
+        },
+        {
+          label: 'OPS',
+          data: ops,
+          borderColor: '#00d4ff',
+          backgroundColor: 'rgba(0,212,255,0.06)',
+          tension: 0.35,
+          pointRadius: 4,
+          yAxisID: 'y',
+        },
+        {
+          label: 'HR',
+          data: hr,
+          borderColor: '#ff4d4d',
+          backgroundColor: 'rgba(255,77,77,0.06)',
+          tension: 0.35,
+          pointRadius: 4,
+          yAxisID: 'y2',
+        },
       ]
     },
     options: {
       responsive: true,
-      plugins: { legend: { labels: { color: '#e8eaf0', font: { family: 'DM Mono' } } } },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#e8eaf0', font: { family: 'DM Mono', size: 11 } } },
+        tooltip: { backgroundColor: '#181b27', borderColor: '#2a2f42', borderWidth: 1 },
+      },
       scales: {
-        x: { ticks: { color: '#5a6070' }, grid: { color: '#1e2230' } },
-        y: { ticks: { color: '#5a6070' }, grid: { color: '#1e2230' } }
+        x:  { ticks: { color: '#5a6070' }, grid: { color: '#1e2230' } },
+        y:  { ticks: { color: '#5a6070' }, grid: { color: '#1e2230' }, position: 'left',  title: { display: true, text: 'AVG / OPS', color: '#5a6070' } },
+        y2: { ticks: { color: '#ff4d4d' }, grid: { display: false  }, position: 'right', title: { display: true, text: 'HR',        color: '#ff4d4d' } },
       }
     }
   });

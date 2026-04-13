@@ -41,13 +41,17 @@
         <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">Historical</a>
       </div>
       <form class="search-form" action="#" onsubmit="navigateToPlayer(event)">
-        <input
-          type="text"
-          id="player-search-nav"
-          class="search-input"
-          placeholder="Search player..."
-          autocomplete="off"
-        />
+        <div class="search-wrap">
+          <input
+            type="text"
+            id="player-search-nav"
+            class="search-input"
+            placeholder="Search player..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="search-dropdown" id="search-dropdown" hidden></div>
+        </div>
         <button type="submit" class="search-btn">Go</button>
       </form>
     </div>
@@ -71,11 +75,119 @@
   {% block extra_js %}{% endblock %}
 
   <script>
-    function navigateToPlayer(e) {
-      e.preventDefault();
-      const name = document.getElementById('player-search-nav').value.trim();
-      if (name) window.location.href = '/player/' + encodeURIComponent(name);
-    }
+    // ── Player search autocomplete ─────────────────────────────────────────────
+    (function () {
+      const input    = document.getElementById('player-search-nav');
+      const dropdown = document.getElementById('search-dropdown');
+      if (!input || !dropdown) return;
+
+      let _timer    = null;
+      let _selected = -1;   // keyboard-highlighted index
+      let _results  = [];
+
+      function goToPlayer(name, playerId) {
+        input.value = name;
+        closeDropdown();
+        const idParam = playerId ? '?id=' + playerId : '';
+        window.location.href = '/player/' + encodeURIComponent(name) + idParam;
+      }
+
+      function closeDropdown() {
+        dropdown.hidden = true;
+        dropdown.innerHTML = '';
+        _selected = -1;
+        _results  = [];
+      }
+
+      function renderDropdown(players) {
+        _results  = players;
+        _selected = -1;
+        dropdown.innerHTML = '';
+
+        if (!players.length) {
+          closeDropdown();
+          return;
+        }
+
+        players.forEach((p, i) => {
+          const item = document.createElement('div');
+          item.className  = 'sd-item';
+          item.dataset.idx = i;
+          const photoUrl = p.player_id
+            ? `https://securea.mlb.com/mlb/images/players/head_shot/${p.player_id}.jpg`
+            : '';
+          item.innerHTML =
+            `<div class="sd-left">` +
+              (photoUrl
+                ? `<img src="${photoUrl}" class="sd-photo" alt="" onerror="this.style.display='none'">`
+                : `<div class="sd-photo-placeholder"></div>`) +
+              `<span class="sd-name">${p.name}</span>` +
+            `</div>` +
+            `<span class="sd-meta">${p.team}${p.hand ? ' · Bats ' + p.hand : ''}</span>`;
+          item.addEventListener('mousedown', (e) => {
+            e.preventDefault();   // don't blur input before click fires
+            goToPlayer(p.name, p.player_id);
+          });
+          dropdown.appendChild(item);
+        });
+
+        dropdown.hidden = false;
+      }
+
+      function highlightItem(idx) {
+        const items = dropdown.querySelectorAll('.sd-item');
+        items.forEach((el, i) => el.classList.toggle('sd-active', i === idx));
+        _selected = idx;
+      }
+
+      function fetchSuggestions(q) {
+        if (q.length < 2) { closeDropdown(); return; }
+        fetch('/api/players/search?q=' + encodeURIComponent(q))
+          .then(r => r.json())
+          .then(data => {
+            // Only render if the input still matches what we searched
+            if (input.value.trim().toLowerCase() === q.toLowerCase()) {
+              renderDropdown(data);
+            }
+          })
+          .catch(() => closeDropdown());
+      }
+
+      // Debounced input
+      input.addEventListener('input', () => {
+        clearTimeout(_timer);
+        const q = input.value.trim();
+        _timer = setTimeout(() => fetchSuggestions(q), 180);
+      });
+
+      // Keyboard navigation
+      input.addEventListener('keydown', (e) => {
+        if (dropdown.hidden) return;
+        const count = _results.length;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          highlightItem((_selected + 1) % count);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          highlightItem((_selected - 1 + count) % count);
+        } else if (e.key === 'Enter' && _selected >= 0) {
+          e.preventDefault();
+          goToPlayer(_results[_selected].name, _results[_selected].player_id);
+        } else if (e.key === 'Escape') {
+          closeDropdown();
+        }
+      });
+
+      // Close on blur (slight delay so mousedown click fires first)
+      input.addEventListener('blur', () => setTimeout(closeDropdown, 150));
+
+      // Form submit fallback — navigate with whatever is typed
+      input.closest('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = input.value.trim();
+        if (name) goToPlayer(name);
+      });
+    })();
   </script>
 
 </body>

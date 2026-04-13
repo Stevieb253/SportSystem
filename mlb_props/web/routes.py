@@ -45,15 +45,51 @@ def index_date(date_str: str):
 
 @bp.route("/player/<player_name>")
 def player(player_name: str):
-    """Individual player career page."""
-    import config as cfg
-    seasons = historical_service.get_player_career(
-        player_name,
-        _pipeline,
-        cfg.STATCAST_START_YEAR,
-        date.today().year,
+    """Individual player career page.
+
+    Looks up the player from today's model to get their MLBAM player_id,
+    then fetches year-by-year career stats from the MLB Stats API (always
+    reliable). Today's Statcast metrics (xBA, barrel%, etc.) are injected
+    directly from the loaded model — no FanGraphs needed.
+    """
+    # Allow player_id to be passed as a query param (from autocomplete nav)
+    player_id: int = request.args.get("id", 0, type=int)
+
+    # If not in URL, find from today's model
+    if not player_id:
+        today_model = _safe_model(date.today().isoformat())
+        for r in today_model.get("hit_probabilities", []):
+            pdict = r.get("player", {}) if isinstance(r, dict) else {}
+            if pdict.get("name", "").lower() == player_name.lower():
+                player_id = int(pdict.get("player_id", 0) or 0)
+                break
+
+    # Get year-by-year career stats from MLB API (fast, always works)
+    seasons = []
+    if player_id:
+        seasons = historical_service.get_player_career_mlb(player_id, player_name)
+
+    # Pull today's Statcast BatterMetrics for the current-season highlights card
+    batter_metrics: dict | None = None
+    mlb_raw_seasons: list[dict] = []
+    if player_id:
+        from api import mlb_api as _mlb
+        today_model = _safe_model(date.today().isoformat())
+        for r in today_model.get("hit_probabilities", []):
+            pdict = r.get("player", {}) if isinstance(r, dict) else {}
+            if int(pdict.get("player_id", 0) or 0) == player_id:
+                batter_metrics = pdict
+                break
+        mlb_raw_seasons = _mlb.get_player_career_stats(player_id)
+
+    return render_template(
+        "player.html",
+        player_name=player_name,
+        player_id=player_id,
+        seasons=seasons,
+        batter_metrics=batter_metrics,
+        mlb_raw_seasons=mlb_raw_seasons,
     )
-    return render_template("player.html", player_name=player_name, seasons=seasons)
 
 
 @bp.route("/historical")
@@ -144,6 +180,52 @@ def api_scores(date_str: str):
         return jsonify([])
 
 
+@bp.route("/api/players/search")
+def api_players_search():
+    """Return players matching a name query from today's model.
+
+    Used by the nav search autocomplete. Searches hit_probabilities for
+    players whose names contain the query string (case-insensitive).
+
+    Query params:
+        q: Search string (min 2 chars).
+
+    Returns:
+        JSON list of {name, team, player_id, position} dicts, max 10 results.
+    """
+    query = request.args.get("q", "").strip().lower()
+    if len(query) < 2:
+        return jsonify([])
+
+    today = date.today().isoformat()
+    model = _safe_model(today)
+
+    seen: set[int] = set()
+    results: list[dict] = []
+
+    for r in model.get("hit_probabilities", []):
+        pdict = r.get("player", {}) if isinstance(r, dict) else {}
+        name  = pdict.get("name", "") or ""
+        if query not in name.lower():
+            continue
+        pid = int(pdict.get("player_id", 0) or 0)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        results.append({
+            "name":      name,
+            "team":      pdict.get("team", ""),
+            "player_id": pid,
+            "hand":      pdict.get("hand", ""),
+        })
+        if len(results) >= 10:
+            break
+
+    # Sort so exact-start matches rise to the top
+    results.sort(key=lambda p: (not p["name"].lower().startswith(query), p["name"]))
+    return jsonify(results)
+
+
 @bp.route("/api/refresh/<date_str>", methods=["POST"])
 def api_refresh(date_str: str):
     """Force-clear cached model and schedule for a date, then rebuild.
@@ -190,28 +272,69 @@ def api_live_game(game_pk: int):
     return jsonify({"game_pk": game_pk, "pitches": pitches})
 
 
+@bp.route("/api/player/lookup")
+def api_player_lookup():
+    """Search for players by name using the MLB Stats API.
+
+    Returns a list of matching players with player_id, name, team, position.
+    Used by the historical page search and nav autocomplete fallback.
+    """
+    query = request.args.get("q", "").strip()
+    if len(query) < 2:
+        return jsonify([])
+    from api import mlb_api as _mlb
+    results = _mlb.search_players(query)
+    return jsonify(results)
+
+
 @bp.route("/api/historical")
 def api_historical():
-    """Return career stats for a player."""
-    player_name = request.args.get("player", "")
-    start_year  = int(request.args.get("start_year", config.STATCAST_START_YEAR))
-    end_year    = int(request.args.get("end_year", date.today().year))
-    seasons = historical_service.get_player_career(
-        player_name, _pipeline, start_year, end_year
-    )
-    return jsonify([dataclasses.asdict(s) for s in seasons])
+    """Return year-by-year career hitting stats for a player.
+
+    Accepts either player_id (preferred) or player name (will search for id).
+    Uses MLB Stats API — no FanGraphs dependency.
+    """
+    from api import mlb_api as _mlb
+
+    player_id   = request.args.get("id", 0, type=int)
+    player_name = request.args.get("player", "").strip()
+
+    # If no id, search by name
+    if not player_id and player_name:
+        matches = _mlb.search_players(player_name)
+        if matches:
+            player_id = matches[0]["player_id"]
+
+    if not player_id:
+        return jsonify([])
+
+    seasons = _mlb.get_player_career_stats(player_id)
+    return jsonify(seasons)
 
 
 @bp.route("/api/leaders")
 def api_leaders():
-    """Return all-time statistical leaders."""
-    stat       = request.args.get("stat", "HR")
-    top_n      = int(request.args.get("top_n", 25))
-    start_year = int(request.args.get("start_year", config.STATCAST_START_YEAR))
-    end_year   = int(request.args.get("end_year", date.today().year))
-    leaders = historical_service.get_all_time_leaders(
-        stat, _pipeline, start_year, end_year, top_n
-    )
+    """Return statistical leaders for a season using the MLB Stats API."""
+    from api import mlb_api as _mlb
+
+    # Map friendly stat names to MLB API leaderCategories
+    stat_map = {
+        "HR":      "homeRuns",
+        "AVG":     "battingAverage",
+        "OPS":     "onBasePlusSlugging",
+        "RBI":     "runsBattedIn",
+        "H":       "hits",
+        "SB":      "stolenBases",
+        "BB":      "walks",
+        "OBP":     "onBasePercentage",
+        "SLG":     "sluggingPercentage",
+        "R":       "runs",
+    }
+    stat    = request.args.get("stat", "HR")
+    season  = int(request.args.get("season", date.today().year))
+    top_n   = int(request.args.get("top_n", 25))
+    category = stat_map.get(stat, "homeRuns")
+    leaders = _mlb.get_season_leaders(category, season, top_n)
     return jsonify(leaders)
 
 

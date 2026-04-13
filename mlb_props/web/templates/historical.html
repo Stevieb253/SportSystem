@@ -6,50 +6,39 @@
   <h1 class="page-title">HISTORICAL DATA</h1>
 </div>
 
-<!-- ── Section 1: Player Search ── -->
+<!-- ── Section 1: Player Career Search ── -->
 <div class="section-card">
   <h2 class="section-title">Player Career Search</h2>
   <div class="hist-controls">
-    <input type="text" id="hist-player-name" class="search-input" placeholder="Player name…" />
-    <select id="hist-start-year" class="select-input">
-      {% for y in range(2015, current_date[:4]|int + 1) %}
-      <option value="{{ y }}" {% if y == 2015 %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
-    </select>
-    <span class="muted">to</span>
-    <select id="hist-end-year" class="select-input">
-      {% for y in range(2015, current_date[:4]|int + 1) %}
-      <option value="{{ y }}" {% if loop.last %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
-    </select>
-    <button class="btn-primary" onclick="loadPlayerHistory()">Load</button>
+    <div class="hist-search-wrap">
+      <input type="text" id="hist-player-name" class="search-input hist-search-input"
+             placeholder="Search player name…" autocomplete="off" spellcheck="false" />
+      <div class="hist-dropdown" id="hist-dropdown" hidden></div>
+    </div>
+    <button class="btn-primary" id="hist-load-btn" onclick="loadPlayerHistory()">Load</button>
   </div>
   <div id="hist-player-result"></div>
 </div>
 
-<!-- ── Section 2: All-Time Leaders ── -->
+<!-- ── Section 2: Season Leaders ── -->
 <div class="section-card">
-  <h2 class="section-title">All-Time Leaders</h2>
+  <h2 class="section-title">Season Leaders</h2>
   <div class="hist-controls">
     <select id="leaders-stat" class="select-input">
       <option value="HR">Home Runs</option>
       <option value="AVG">Batting Average</option>
       <option value="OPS">OPS</option>
-      <option value="WAR">WAR</option>
-      <option value="xwOBA">xwOBA</option>
-      <option value="barrel_pct">Barrel%</option>
-      <option value="hard_hit_pct">Hard Hit%</option>
-      <option value="exit_velocity">Exit Velocity</option>
+      <option value="RBI">RBI</option>
+      <option value="H">Hits</option>
+      <option value="SB">Stolen Bases</option>
+      <option value="BB">Walks</option>
+      <option value="OBP">On-Base %</option>
+      <option value="SLG">Slugging %</option>
+      <option value="R">Runs</option>
     </select>
-    <select id="leaders-start-year" class="select-input">
-      {% for y in range(2015, current_date[:4]|int + 1) %}
-      <option value="{{ y }}" {% if y == 2015 %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
-    </select>
-    <span class="muted">to</span>
-    <select id="leaders-end-year" class="select-input">
-      {% for y in range(2015, current_date[:4]|int + 1) %}
-      <option value="{{ y }}" {% if loop.last %}selected{% endif %}>{{ y }}</option>
+    <select id="leaders-season" class="select-input">
+      {% for y in range(current_date[:4]|int, 1999, -1) %}
+      <option value="{{ y }}" {% if loop.first %}selected{% endif %}>{{ y }}</option>
       {% endfor %}
     </select>
     <select id="leaders-top-n" class="select-input">
@@ -65,70 +54,219 @@
 
 {% block extra_js %}
 <script>
+// ── Player career search with autocomplete ──────────────────────────────────
+(function () {
+  const input    = document.getElementById('hist-player-name');
+  const dropdown = document.getElementById('hist-dropdown');
+  if (!input || !dropdown) return;
+
+  let _timer   = null;
+  let _sel     = -1;
+  let _results = [];
+  let _chosen  = null;   // {player_id, name} — set when user picks from dropdown
+
+  window._histChosen = null;
+
+  function choose(p) {
+    input.value = p.name;
+    _chosen = p;
+    window._histChosen = p;
+    closeDropdown();
+  }
+
+  function closeDropdown() {
+    dropdown.hidden = true;
+    dropdown.innerHTML = '';
+    _sel = -1;
+    _results = [];
+  }
+
+  function renderDropdown(players) {
+    _results = players;
+    _sel = -1;
+    dropdown.innerHTML = '';
+    if (!players.length) { closeDropdown(); return; }
+
+    players.forEach((p, i) => {
+      const item = document.createElement('div');
+      item.className = 'sd-item';
+      const photo = p.player_id
+        ? `<img src="https://securea.mlb.com/mlb/images/players/head_shot/${p.player_id}.jpg" class="sd-photo" alt="" onerror="this.style.display='none'">`
+        : `<div class="sd-photo-placeholder"></div>`;
+      item.innerHTML =
+        `<div class="sd-left">${photo}<span class="sd-name">${p.name}</span></div>` +
+        `<span class="sd-meta">${p.team || ''}${p.position ? ' · ' + p.position : ''}${p.active ? '' : ' · Retired'}</span>`;
+      item.addEventListener('mousedown', e => { e.preventDefault(); choose(p); });
+      dropdown.appendChild(item);
+    });
+    dropdown.hidden = false;
+  }
+
+  function fetchSuggestions(q) {
+    if (q.length < 2) { closeDropdown(); return; }
+    fetch('/api/player/lookup?q=' + encodeURIComponent(q))
+      .then(r => r.json())
+      .then(data => {
+        if (input.value.trim().toLowerCase() === q.toLowerCase()) renderDropdown(data);
+      })
+      .catch(() => closeDropdown());
+  }
+
+  input.addEventListener('input', () => {
+    _chosen = null; window._histChosen = null;
+    clearTimeout(_timer);
+    _timer = setTimeout(() => fetchSuggestions(input.value.trim()), 180);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (dropdown.hidden) return;
+    const n = _results.length;
+    if (e.key === 'ArrowDown') { e.preventDefault(); highlight((_sel + 1) % n); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); highlight((_sel - 1 + n) % n); }
+    else if (e.key === 'Enter' && _sel >= 0) { e.preventDefault(); choose(_results[_sel]); }
+    else if (e.key === 'Escape') closeDropdown();
+  });
+
+  function highlight(idx) {
+    dropdown.querySelectorAll('.sd-item').forEach((el, i) => el.classList.toggle('sd-active', i === idx));
+    _sel = idx;
+  }
+
+  input.addEventListener('blur', () => setTimeout(closeDropdown, 150));
+
+  // Allow Enter on input to trigger load
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && dropdown.hidden) loadPlayerHistory();
+  });
+})();
+
+// ── Load player history ──────────────────────────────────────────────────────
 function loadPlayerHistory() {
-  const name  = document.getElementById('hist-player-name').value.trim();
-  const start = document.getElementById('hist-start-year').value;
-  const end   = document.getElementById('hist-end-year').value;
+  const chosen = window._histChosen;
+  const name   = document.getElementById('hist-player-name').value.trim();
   if (!name) return;
+
   const el = document.getElementById('hist-player-result');
-  el.innerHTML = '<div class="empty-state">Loading…</div>';
-  fetch(`/api/historical?player=${encodeURIComponent(name)}&start_year=${start}&end_year=${end}`)
+  el.innerHTML = '<div class="hist-loading"><span class="spinner"></span> Loading career stats…</div>';
+
+  const url = chosen
+    ? `/api/historical?id=${chosen.player_id}`
+    : `/api/historical?player=${encodeURIComponent(name)}`;
+
+  fetch(url)
     .then(r => r.json())
     .then(seasons => {
-      if (!seasons.length) { el.innerHTML = '<div class="empty-state">No data found.</div>'; return; }
-      el.innerHTML = buildCareerTable(seasons);
+      if (!seasons.length) {
+        el.innerHTML = '<div class="empty-state"><div class="es-icon">⚾</div><p class="es-title">No data found</p><p class="es-sub">Try searching by full name.</p></div>';
+        return;
+      }
+      const pid = chosen ? chosen.player_id : 0;
+      el.innerHTML = buildCareerResult(seasons, name, pid);
     })
     .catch(() => { el.innerHTML = '<div class="empty-state">Error loading data.</div>'; });
 }
 
-function loadLeaders() {
-  const stat  = document.getElementById('leaders-stat').value;
-  const start = document.getElementById('leaders-start-year').value;
-  const end   = document.getElementById('leaders-end-year').value;
-  const topN  = document.getElementById('leaders-top-n').value;
-  const el    = document.getElementById('leaders-result');
-  el.innerHTML = '<div class="empty-state">Loading…</div>';
-  fetch(`/api/leaders?stat=${stat}&start_year=${start}&end_year=${end}&top_n=${topN}`)
-    .then(r => r.json())
-    .then(rows => {
-      if (!rows.length) { el.innerHTML = '<div class="empty-state">No data found.</div>'; return; }
-      let html = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Rank</th><th>Player</th><th>Team</th><th>Value</th></tr></thead><tbody>';
-      rows.forEach(r => {
-        html += `<tr><td class="mono">${r.rank}</td><td>${r.player}</td><td>${r.team}</td><td class="mono accent">${r.value}</td></tr>`;
-      });
-      html += '</tbody></table></div>';
-      el.innerHTML = html;
-    })
-    .catch(() => { el.innerHTML = '<div class="empty-state">Error loading data.</div>'; });
-}
+function buildCareerResult(seasons, name, playerId) {
+  const photo = playerId
+    ? `<img src="https://securea.mlb.com/mlb/images/players/head_shot/${playerId}.jpg"
+             class="hist-result-photo" alt="" onerror="this.style.display='none'">`
+    : '';
+  const latest = seasons[seasons.length - 1] || {};
 
-function buildCareerTable(seasons) {
-  let html = '<div class="table-wrap"><table class="data-table"><thead><tr>';
-  const cols = ['Season','Team','G','PA','AVG','HR','RBI','OPS','xBA','xwOBA','Barrel%','Hard Hit%','Sweet Spot%','EV50','Whiff%','WAR'];
-  cols.forEach(c => { html += `<th>${c}</th>`; });
-  html += '</tr></thead><tbody>';
-  seasons.forEach(s => {
-    html += `<tr>
+  let html = `
+    <div class="hist-result-header">
+      ${photo}
+      <div>
+        <div class="hist-result-name">${name}</div>
+        <div class="hist-result-meta">${latest.team || ''} &nbsp;·&nbsp; ${seasons.length} MLB seasons &nbsp;·&nbsp; Latest: ${latest.season || ''}</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+    <table class="data-table" id="hist-career-table">
+      <thead><tr>
+        <th onclick="sortTable('hist-career-table',0)">Season</th>
+        <th onclick="sortTable('hist-career-table',1)">Team</th>
+        <th onclick="sortTable('hist-career-table',2)">G</th>
+        <th onclick="sortTable('hist-career-table',3)">PA</th>
+        <th onclick="sortTable('hist-career-table',4)">AB</th>
+        <th onclick="sortTable('hist-career-table',5)">H</th>
+        <th onclick="sortTable('hist-career-table',6)">HR</th>
+        <th onclick="sortTable('hist-career-table',7)">RBI</th>
+        <th onclick="sortTable('hist-career-table',8)">SB</th>
+        <th onclick="sortTable('hist-career-table',9)">BB</th>
+        <th onclick="sortTable('hist-career-table',10)">SO</th>
+        <th onclick="sortTable('hist-career-table',11)">AVG</th>
+        <th onclick="sortTable('hist-career-table',12)">OBP</th>
+        <th onclick="sortTable('hist-career-table',13)">SLG</th>
+        <th onclick="sortTable('hist-career-table',14)">OPS</th>
+      </tr></thead>
+      <tbody>`;
+
+  seasons.forEach((s, i) => {
+    const isLatest = i === seasons.length - 1;
+    const avgHi  = s.avg  >= 0.280 ? ' accent' : '';
+    const opsHi  = s.ops  >= 0.800 ? ' accent' : '';
+    html += `<tr${isLatest ? ' class="career-row-latest"' : ''}>
       <td class="mono">${s.season}</td>
       <td>${s.team}</td>
       <td class="mono">${s.games}</td>
       <td class="mono">${s.pa}</td>
-      <td class="mono">${s.avg.toFixed(3)}</td>
+      <td class="mono">${s.ab}</td>
+      <td class="mono">${s.hits}</td>
       <td class="mono">${s.hr}</td>
       <td class="mono">${s.rbi}</td>
-      <td class="mono">${s.ops.toFixed(3)}</td>
-      <td class="mono accent">${s.xba.toFixed(3)}</td>
-      <td class="mono accent">${s.xwoba.toFixed(3)}</td>
-      <td class="mono">${(s.barrel_pct*100).toFixed(1)}%</td>
-      <td class="mono">${(s.hard_hit_pct*100).toFixed(1)}%</td>
-      <td class="mono">${(s.sweet_spot_pct*100).toFixed(1)}%</td>
-      <td class="mono">${s.ev50.toFixed(1)}</td>
-      <td class="mono">${(s.whiff_pct*100).toFixed(1)}%</td>
-      <td class="mono">${s.war.toFixed(1)}</td>
+      <td class="mono">${s.sb}</td>
+      <td class="mono">${s.bb}</td>
+      <td class="mono">${s.so}</td>
+      <td class="mono${avgHi}">${s.avg.toFixed(3)}</td>
+      <td class="mono">${s.obp.toFixed(3)}</td>
+      <td class="mono">${s.slg.toFixed(3)}</td>
+      <td class="mono${opsHi}">${s.ops.toFixed(3)}</td>
     </tr>`;
   });
+
   html += '</tbody></table></div>';
   return html;
+}
+
+// ── Season leaders ───────────────────────────────────────────────────────────
+function loadLeaders() {
+  const stat   = document.getElementById('leaders-stat').value;
+  const season = document.getElementById('leaders-season').value;
+  const topN   = document.getElementById('leaders-top-n').value;
+  const el     = document.getElementById('leaders-result');
+  el.innerHTML = '<div class="hist-loading"><span class="spinner"></span> Loading leaders…</div>';
+
+  fetch(`/api/leaders?stat=${stat}&season=${season}&top_n=${topN}`)
+    .then(r => r.json())
+    .then(rows => {
+      if (!rows.length) {
+        el.innerHTML = '<div class="empty-state"><div class="es-icon">📊</div><p class="es-title">No data found</p></div>';
+        return;
+      }
+      const statLabel = document.getElementById('leaders-stat').options[document.getElementById('leaders-stat').selectedIndex].text;
+      let html = `
+        <div class="leaders-grid">`;
+      rows.forEach(r => {
+        const photo = r.player_id
+          ? `<img src="https://securea.mlb.com/mlb/images/players/head_shot/${r.player_id}.jpg"
+                   class="leader-photo" alt="" onerror="this.style.display='none'">`
+          : `<div class="leader-photo-placeholder"></div>`;
+        html += `
+          <div class="leader-card">
+            <span class="leader-rank">${r.rank}</span>
+            ${photo}
+            <div class="leader-info">
+              <span class="leader-name">${r.name}</span>
+              <span class="leader-team">${r.team}</span>
+            </div>
+            <span class="leader-value">${r.value}</span>
+          </div>`;
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    })
+    .catch(() => { el.innerHTML = '<div class="empty-state">Error loading data.</div>'; });
 }
 </script>
 {% endblock %}
