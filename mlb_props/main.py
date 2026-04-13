@@ -69,7 +69,7 @@ def run_web(date_str: str, port: int) -> None:
     local_ip = _local_ip()
     print(f"\n  Server running at   http://localhost:{port}")
     print(f"  Friends on network  http://{local_ip}:{port}\n")
-    app.run(host=config.HOST, port=port, debug=config.DEBUG, use_reloader=False)
+    app.run(host=config.HOST, port=port, debug=config.DEBUG, use_reloader=False, threaded=True)
 
 
 def run_json(date_str: str) -> None:

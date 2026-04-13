@@ -56,20 +56,34 @@ def get_season_batting_fangraphs(year: int, min_pa: int = 25) -> pd.DataFrame:
 
     try:
         df = pb.batting_stats(year, qual=min_pa)
-        if _cache and not df.empty:
-            _cache.set(cache_key, df.to_dict(orient="records"))
+        if _cache:
+            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
         return df
     except Exception as exc:
         logger.warning("FanGraphs batting stats failed (year=%s): %s", year, exc)
 
     # Fallback to Baseball Reference via pybaseball
+    # bref scraping is brittle — can fail with "list index out of range" on HTML changes.
     try:
         df = pb.batting_stats_bref(year)
-        if not df.empty and _cache:
-            _cache.set(cache_key, df.to_dict(orient="records"))
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError(f"bref returned non-DataFrame: {type(df)}")
+        if _cache:
+            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
         return df
+    except (IndexError, KeyError, ValueError, AttributeError) as exc2:
+        # HTML structure changed or empty page — log and return empty, caller will use MLB API
+        logger.warning(
+            "Baseball Reference batting stats failed (year=%s) — falling back to MLB API: %s",
+            year, exc2,
+        )
+        if _cache:
+            _cache.set(cache_key, [])  # cache the failure so we don't retry this session
+        return pd.DataFrame()
     except Exception as exc2:
         logger.warning("Baseball Reference batting stats also failed (year=%s): %s", year, exc2)
+        if _cache:
+            _cache.set(cache_key, [])
         return pd.DataFrame()
 
 
@@ -95,19 +109,31 @@ def get_season_pitching_fangraphs(year: int, min_ip: int = 5) -> pd.DataFrame:
 
     try:
         df = pb.pitching_stats(year, qual=min_ip)
-        if _cache and not df.empty:
-            _cache.set(cache_key, df.to_dict(orient="records"))
+        if _cache:
+            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
         return df
     except Exception as exc:
         logger.warning("FanGraphs pitching stats failed (year=%s): %s", year, exc)
 
     try:
         df = pb.pitching_stats_bref(year)
-        if not df.empty and _cache:
-            _cache.set(cache_key, df.to_dict(orient="records"))
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError(f"bref returned non-DataFrame: {type(df)}")
+        if _cache:
+            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
         return df
+    except (IndexError, KeyError, ValueError, AttributeError) as exc2:
+        logger.warning(
+            "Baseball Reference pitching stats failed (year=%s) — falling back to MLB API: %s",
+            year, exc2,
+        )
+        if _cache:
+            _cache.set(cache_key, [])  # cache the failure so we don't retry this session
+        return pd.DataFrame()
     except Exception as exc2:
         logger.warning("Baseball Reference pitching stats also failed (year=%s): %s", year, exc2)
+        if _cache:
+            _cache.set(cache_key, [])
         return pd.DataFrame()
 
 
@@ -144,6 +170,8 @@ def get_park_factors(year: int) -> pd.DataFrame:
             logger.warning("Park factors via %s failed (year=%s): %s", fn_name, year, exc)
 
     logger.warning("Park factors unavailable — using neutral 100 for all parks")
+    if _cache:
+        _cache.set(cache_key, [])  # cache the failure so we don't retry every build
     return pd.DataFrame()
 
 

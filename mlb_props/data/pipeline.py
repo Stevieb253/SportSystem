@@ -67,19 +67,40 @@ class DataPipeline:
 
         batter_statcast  = sv_api.get_statcast_leaderboard(year, "batter")
         batter_custom    = sv_api.get_custom_leaderboard(year, "batter")
+        batter_expected  = sv_api.get_expected_stats(year, "batter")   # ba, xba, woba, xwoba
         pitcher_statcast = sv_api.get_statcast_leaderboard(year, "pitcher")
         pitcher_custom   = sv_api.get_custom_leaderboard(year, "pitcher")
         pitcher_expected = sv_api.get_expected_stats(year, "pitcher")
 
-        batter_merged  = sv_api.merge_savant_data(batter_statcast, batter_custom)
-        pitcher_merged = sv_api.merge_savant_data(pitcher_statcast + pitcher_expected, pitcher_custom)
+        # Merge batter data in two passes: statcast+custom, then layer expected stats on top
+        batter_merged = sv_api.merge_savant_data(batter_statcast, batter_custom)
+        for row in batter_expected:
+            from api.baseball_savant_api import _parse_player_id
+            pid = _parse_player_id(row)
+            if pid:
+                if pid in batter_merged:
+                    batter_merged[pid].update(row)
+                else:
+                    batter_merged[pid] = dict(row)
+
+        # Merge pitcher data in two passes: statcast+custom first, then layer
+        # expected stats (xERA, xwOBA) on top via a second update pass.
+        pitcher_merged = sv_api.merge_savant_data(pitcher_statcast, pitcher_custom)
+        for row in pitcher_expected:
+            from api.baseball_savant_api import _parse_player_id
+            pid = _parse_player_id(row)
+            if pid:
+                if pid in pitcher_merged:
+                    pitcher_merged[pid].update(row)
+                else:
+                    pitcher_merged[pid] = dict(row)
 
         combined = {**batter_merged, **pitcher_merged}
         if combined:
             self.cache.set(cache_key, {str(k): v for k, v in combined.items()})
         logger.info(
-            "Savant season data loaded: %d batters, %d pitchers",
-            len(batter_merged), len(pitcher_merged),
+            "Savant season data loaded: %d batters (+%d expected), %d pitchers",
+            len(batter_merged), len(batter_expected), len(pitcher_merged),
         )
         return combined
 
@@ -198,6 +219,48 @@ class DataPipeline:
             if not matches.empty:
                 fg_row = matches.iloc[0]
 
+        # MLB Stats API fallback: always fetch when FanGraphs is unavailable (fg_row is None)
+        # to populate homeRuns + gamesPlayed for hr_per_game; also fills core stats when
+        # Savant is missing them entirely.
+        _needs_core   = not savant_player or not any(
+            savant_player.get(k) for k in ("ba", "batting_avg", "xba", "est_ba", "woba")
+        )
+        _needs_counts = fg_row is None  # FanGraphs blocked → HR/G counts unavailable
+        if player_id and (_needs_core or _needs_counts):
+            try:
+                from api import mlb_api
+                mlb_stats = mlb_api.get_player_stats(player_id, "hitting", self._season)
+                if mlb_stats:
+                    mlb_mapped: dict = {
+                        "homeRuns":     mlb_stats.get("homeRuns", 0),
+                        "gamesPlayed":  mlb_stats.get("gamesPlayed", 0),
+                    }
+                    if _needs_core:
+                        mlb_mapped.update({
+                            "ba":          mlb_stats.get("avg", 0),
+                            "batting_avg": mlb_stats.get("avg", 0),
+                            "obp":         mlb_stats.get("obp", 0),
+                            "slg":         mlb_stats.get("slg", 0),
+                            "ops":         mlb_stats.get("ops", 0),
+                            "pa":          mlb_stats.get("plateAppearances", 0),
+                            "strikeOuts":  mlb_stats.get("strikeOuts", 0),
+                            "baseOnBalls": mlb_stats.get("baseOnBalls", 0),
+                            "atBats":      mlb_stats.get("atBats", 0),
+                        })
+                        # Derive K% and BB% from raw counts
+                        pa = int(mlb_stats.get("plateAppearances", 0) or 0)
+                        if pa > 0:
+                            mlb_mapped["k_percent"] = round(
+                                int(mlb_stats.get("strikeOuts", 0) or 0) / pa, 4
+                            )
+                            mlb_mapped["bb_percent"] = round(
+                                int(mlb_stats.get("baseOnBalls", 0) or 0) / pa, 4
+                            )
+                    savant_player = {**(savant_player or {}), **mlb_mapped}
+                    logger.debug("MLB API stats loaded for batter %s (%s)", player_name, player_id)
+            except Exception as exc:
+                logger.warning("MLB API batter fallback failed (%s): %s", player_id, exc)
+
         # Recent form from Baseball Savant
         recent_records = sv_api.get_recent_statcast(
             player_id, cfg.RECENT_FORM_DAYS, "batter"
@@ -215,6 +278,7 @@ class DataPipeline:
             vs_pitcher=vs_pitcher,
             season=self._season,
         )
+
         return metrics
 
     def load_pitcher_data(
@@ -248,6 +312,53 @@ class DataPipeline:
             matches = pitching_df[pitching_df[name_col].str.lower() == pitcher_name.lower()]
             if not matches.empty:
                 fg_row = matches.iloc[0]
+
+        # MLB Stats API supplement: Savant leaderboard doesn't include WHIP, K/9, BB/9, HR/9.
+        # Fetch from MLB Stats API whenever FanGraphs is unavailable (fg_row is None)
+        # OR when the saved pitcher data is missing these traditional fields.
+        _sv_whip = float(savant_pitcher.get("whip", 0) or 0) if savant_pitcher else 0
+        _sv_era  = float(savant_pitcher.get("era", 0) or savant_pitcher.get("p_era", 0) or 0) if savant_pitcher else 0
+        _need_mlb_supplement = pitcher_id and (fg_row is None or _sv_whip == 0)
+        if _need_mlb_supplement:
+            try:
+                from api import mlb_api
+                mlb_stats = mlb_api.get_player_stats(pitcher_id, "pitching", self._season)
+                if mlb_stats:
+                    # Map MLB API stat keys → Savant-compatible keys used by normalizer
+                    mlb_mapped: dict = {
+                        "era":           mlb_stats.get("era", 0),
+                        "p_era":         mlb_stats.get("era", 0),
+                        "whip":          mlb_stats.get("whip", 0),
+                        "strikeOuts":    mlb_stats.get("strikeOuts", 0),
+                        "baseOnBalls":   mlb_stats.get("baseOnBalls", 0),
+                        "homeRuns":      mlb_stats.get("homeRuns", 0),
+                        "inningsPitched": mlb_stats.get("inningsPitched", 0),
+                    }
+                    # Derive K/9, BB/9, HR/9 and K%/BB% from raw counts
+                    try:
+                        # MLB API returns innings like "34.2" meaning 34 full + 2 outs
+                        ip_parts = str(mlb_stats.get("inningsPitched", "0")).split(".")
+                        full_inn = int(ip_parts[0]) if ip_parts[0] else 0
+                        partial = int(ip_parts[1]) if len(ip_parts) > 1 and ip_parts[1] else 0
+                        true_ip = full_inn + partial / 3
+                        ks  = int(mlb_stats.get("strikeOuts", 0) or 0)
+                        bbs = int(mlb_stats.get("baseOnBalls", 0) or 0)
+                        hrs = int(mlb_stats.get("homeRuns", 0) or 0)
+                        bf  = int(mlb_stats.get("battersFaced", 0) or 0)
+                        if true_ip > 0:
+                            mlb_mapped["k9"]  = round(ks  * 9 / true_ip, 2)
+                            mlb_mapped["bb9"] = round(bbs * 9 / true_ip, 2)
+                            mlb_mapped["hr9"] = round(hrs * 9 / true_ip, 2)
+                        if bf > 0:
+                            # Store as 0-100 percentage so _svp() auto-converts to 0-1
+                            mlb_mapped["k_percent"]  = round(ks  / bf * 100, 1)
+                            mlb_mapped["bb_percent"] = round(bbs / bf * 100, 1)
+                    except Exception:
+                        pass
+                    savant_pitcher = {**(savant_pitcher or {}), **mlb_mapped}
+                    logger.debug("MLB API fallback stats loaded for pitcher %s (%s)", pitcher_name, pitcher_id)
+            except Exception as exc:
+                logger.warning("MLB API pitcher fallback failed (%s): %s", pitcher_id, exc)
 
         raw_pitcher = {"id": pitcher_id, "fullName": pitcher_name, "pitchHand": {"code": hand}}
         return normalizer.normalize_probable_pitcher(raw_pitcher, savant_pitcher, fg_row)
