@@ -36,6 +36,46 @@ def get_player_career(
     return pipeline.load_historical_player(player_name, start_year, end_year)
 
 
+def get_player_career_mlb(
+    player_id: int,
+    player_name: str,
+) -> list[CareerSeason]:
+    """Fetch year-by-year career hitting stats from the MLB Stats API.
+
+    Uses the reliable /people/{id}/stats?stats=yearByYear endpoint which
+    always works without scraping. Returns traditional stats only for
+    historical seasons; current season Statcast data is added separately
+    by the route from the daily model.
+
+    Args:
+        player_id: MLBAM player ID.
+        player_name: Player's full name (used for logging only).
+
+    Returns:
+        List of CareerSeason sorted ascending by season year.
+    """
+    from api import mlb_api
+
+    raw = mlb_api.get_player_career_stats(player_id)
+    if not raw:
+        logger.warning("No MLB career stats found for %s (id=%s)", player_name, player_id)
+        return []
+
+    seasons: list[CareerSeason] = []
+    for s in raw:
+        seasons.append(CareerSeason(
+            season=s["season"],
+            team=s["team"],
+            games=s["games"],
+            pa=s["pa"],
+            avg=s["avg"],
+            hr=s["hr"],
+            rbi=s["rbi"],
+            ops=s["ops"],
+        ))
+    return seasons
+
+
 def get_all_time_leaders(
     stat: str,
     pipeline: Any,

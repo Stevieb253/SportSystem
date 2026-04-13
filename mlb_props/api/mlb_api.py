@@ -419,6 +419,161 @@ def get_recent_boxscore_lineup(team_id: int, before_date: str) -> tuple[list[dic
     return [], ""
 
 
+def get_player_career_stats(player_id: int) -> list[dict]:
+    """Fetch year-by-year hitting stats for a player from the MLB Stats API.
+
+    Returns one entry per season the player appeared in the majors.
+    Cached for 6 hours — career stats don't change intra-day.
+
+    Args:
+        player_id: MLBAM player ID.
+
+    Returns:
+        List of season dicts sorted ascending by season year.
+    """
+    cache_key = f"mlb_career_{player_id}"
+    if _cache:
+        cached = _cache.get(cache_key, ttl_hours=6)
+        if cached is not None:
+            return cached
+
+    url = f"{config.MLB_API_BASE_URL}/people/{player_id}/stats"
+    params = {"stats": "yearByYear", "group": "hitting", "sportId": 1}
+    data = _get(url, params)
+
+    seasons: list[dict] = []
+    for stat_group in data.get("stats", []):
+        for split in stat_group.get("splits", []):
+            season_year = int(split.get("season", 0) or 0)
+            if season_year < 2000:
+                continue
+            team = split.get("team", {})
+            stat = split.get("stat", {})
+
+            def _f(key: str) -> float:
+                try:
+                    v = stat.get(key, 0)
+                    return float(v) if v not in (None, "", "-.--", ".---") else 0.0
+                except (ValueError, TypeError):
+                    return 0.0
+
+            def _i(key: str) -> int:
+                try:
+                    return int(stat.get(key, 0) or 0)
+                except (ValueError, TypeError):
+                    return 0
+
+            seasons.append({
+                "season": season_year,
+                "team":   team.get("abbreviation", ""),
+                "games":  _i("gamesPlayed"),
+                "pa":     _i("plateAppearances"),
+                "ab":     _i("atBats"),
+                "hits":   _i("hits"),
+                "doubles":_i("doubles"),
+                "triples":_i("triples"),
+                "hr":     _i("homeRuns"),
+                "rbi":    _i("rbi"),
+                "bb":     _i("baseOnBalls"),
+                "so":     _i("strikeOuts"),
+                "sb":     _i("stolenBases"),
+                "avg":    _f("avg"),
+                "obp":    _f("obp"),
+                "slg":    _f("slg"),
+                "ops":    _f("ops"),
+            })
+
+    seasons.sort(key=lambda s: s["season"])
+
+    if _cache and seasons:
+        _cache.set(cache_key, seasons)
+    return seasons
+
+
+def search_players(query: str) -> list[dict]:
+    """Search for players by name using the MLB Stats API.
+
+    Args:
+        query: Partial or full player name.
+
+    Returns:
+        List of dicts with player_id, name, team, position, active.
+    """
+    if not query or len(query) < 2:
+        return []
+
+    url = f"{config.MLB_API_BASE_URL}/people/search"
+    params = {"names": query, "sportId": 1}
+    data = _get(url, params)
+
+    results: list[dict] = []
+    for person in data.get("people", []):
+        pid = person.get("id", 0)
+        if not pid:
+            continue
+        # Current team abbreviation (may be absent for retired players)
+        team = ""
+        curr = person.get("currentTeam", {})
+        if isinstance(curr, dict):
+            team = curr.get("abbreviation", "") or curr.get("name", "")
+        results.append({
+            "player_id": pid,
+            "name":      person.get("fullName", ""),
+            "team":      team,
+            "position":  person.get("primaryPosition", {}).get("abbreviation", ""),
+            "active":    person.get("active", False),
+        })
+    # Active players first, then alphabetical
+    results.sort(key=lambda p: (not p["active"], p["name"]))
+    return results[:15]
+
+
+def get_season_leaders(stat_category: str, season: int, limit: int = 25) -> list[dict]:
+    """Fetch statistical leaders for a given season from the MLB Stats API.
+
+    Args:
+        stat_category: MLB API leader category (e.g. 'homeRuns', 'battingAverage').
+        season: Season year.
+        limit: Number of leaders to return.
+
+    Returns:
+        List of dicts with rank, player_id, name, team, value.
+    """
+    cache_key = f"mlb_leaders_{stat_category}_{season}_{limit}"
+    if _cache:
+        cached = _cache.get(cache_key, ttl_hours=6)
+        if cached is not None:
+            return cached
+
+    url = f"{config.MLB_API_BASE_URL}/stats/leaders"
+    params = {
+        "leaderCategories": stat_category,
+        "season":           season,
+        "sportId":          1,
+        "limit":            limit,
+        "hydrate":          "person,team",
+    }
+    data = _get(url, params)
+
+    results: list[dict] = []
+    for category in data.get("leagueLeaders", []):
+        for entry in category.get("leaders", []):
+            person = entry.get("person", {})
+            team   = entry.get("team", {})
+            pid    = person.get("id", 0)
+            results.append({
+                "rank":      entry.get("rank", len(results) + 1),
+                "player_id": pid,
+                "name":      person.get("fullName", ""),
+                "team":      team.get("abbreviation", ""),
+                "value":     entry.get("value", ""),
+            })
+
+    if _cache and results:
+        _cache.set(cache_key, results)
+    return results
+
+
 def get_standings(season: int) -> dict:
     """Fetch league standings for a season.
 
