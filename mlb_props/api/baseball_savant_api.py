@@ -273,9 +273,11 @@ def get_recent_statcast(player_id: int, days: int, player_type: str) -> list[dic
     Returns:
         List of pitch/batted-ball records.
     """
+    # 6-hour TTL: recent form data doesn't change mid-day, and we only need
+    # one network call per player per session (threads share the cache).
     cache_key = f"savant_recent_{player_id}_{days}days"
     if _cache:
-        cached = _cache.get(cache_key)
+        cached = _cache.get(cache_key, ttl_hours=6)
         if cached is not None:
             return cached
 
@@ -298,9 +300,9 @@ def get_recent_statcast(player_id: int, days: int, player_type: str) -> list[dic
     time.sleep(config.SAVANT_REQUEST_DELAY_SECONDS)
     data = _get(config.SAVANT_SEARCH_URL, params)
 
-    if _cache and data:
-        _cache.set(cache_key, data)
-    return data
+    if _cache:
+        _cache.set(cache_key, data if data else [])  # cache even on empty result
+    return data if data else []
 
 
 def merge_savant_data(

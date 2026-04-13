@@ -163,7 +163,7 @@ SAVANT_SEARCH_URL               = "https://baseballsavant.mlb.com/statcast_searc
 SAVANT_PERCENTILE_URL           = "https://baseballsavant.mlb.com/leaderboard/percentile-rankings"
 
 # ── API Keys (user fills in) ───────────────────────────────────────────────────
-ODDS_API_KEY            = ""   # Free at the-odds-api.com — 500 requests/month
+ODDS_API_KEY            = "f63570eee680606f78c2899d96148dce"   # Free at the-odds-api.com — 500 requests/month
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
 CACHE_DIR               = ".cache"

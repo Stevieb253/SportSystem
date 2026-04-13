@@ -4,8 +4,19 @@
 {% block content %}
 <div class="page-header">
   <h1 class="page-title">DAILY MODEL</h1>
-  <div class="date-nav">
-    <input type="date" id="date-picker" value="{{ selected_date }}" onchange="navigateToDate(this.value)" class="date-input" />
+  <div class="header-row">
+    <div class="date-nav" id="date-nav" data-date="{{ selected_date }}">
+      <button class="date-arrow" id="btn-prev" title="Previous day">&#8249;</button>
+      <button class="date-label-btn" id="btn-date-label">
+        <span id="date-display">{{ selected_date | format_date }}</span>
+      </button>
+      <input type="date" id="date-picker" value="{{ selected_date }}" class="date-input-hidden" />
+      <button class="date-arrow" id="btn-next" title="Next day">&#8250;</button>
+    </div>
+    <button class="refresh-btn" id="btn-refresh" title="Refresh lineups and projections"
+            data-date="{{ selected_date }}">
+      &#8635; Refresh
+    </button>
   </div>
 </div>
 
@@ -13,27 +24,31 @@
 <div class="alert alert-error">{{ model.error }}</div>
 {% endif %}
 
-{% if not model.get('lineups_confirmed') %}
+{% set lineup_mode = model.get('lineup_mode', 'none') %}
+{% if lineup_mode == 'official' %}
+<div class="alert alert-success">
+  Official lineups confirmed — projections are based on today's confirmed batting orders.
+</div>
+{% elif lineup_mode == 'probable' %}
+<div class="alert alert-warn">
+  Official lineups not yet posted — showing <strong>probable lineups</strong> based on recent batting orders. Stats and projections are pregame previews only. Will auto-update when official lineups drop.
+</div>
+{% elif lineup_mode == 'mixed' %}
+<div class="alert alert-warn">
+  Some lineups confirmed, others still probable — check individual games for lineup status.
+</div>
+{% else %}
 <div class="alert alert-info">
-  Lineups not yet posted — showing probable pitcher matchups. Refreshing automatically.
+  Lineups not yet available — game cards and pitcher matchups are shown below. Hit/HR projections will appear once lineup data is available.
 </div>
 {% endif %}
 
-<!-- ── Data source badges ── -->
-{% if model.get('data_sources') %}
-<div class="source-badges">
-  {% for src in model.data_sources %}
-  <span class="badge badge-source">{{ src }}</span>
-  {% endfor %}
-</div>
-{% endif %}
 
 <!-- ── Tab buttons ── -->
 <div class="tab-bar">
   <button class="tab-btn active" onclick="showTab('games', this)">Games ({{ model.get('games', [])|length }})</button>
   <button class="tab-btn" onclick="showTab('hits', this)">Hit Probability ({{ model.get('hit_probabilities', [])|length }})</button>
   <button class="tab-btn" onclick="showTab('hrs', this)">Home Runs ({{ model.get('hr_probabilities', [])|length }})</button>
-  <button class="tab-btn" onclick="showTab('live', this)">Live Scores</button>
 </div>
 
 <!-- ════════════════════════════════════════════════
@@ -43,52 +58,77 @@
   {% if model.get('games') %}
   <div class="games-grid">
     {% for game in model.games %}
-    {% set g = game if game is mapping else game.__dict__ if hasattr(game, '__dict__') else {} %}
-    <a href="/game/{{ g.get('game_pk', 0) }}" class="game-card">
-      <div class="game-card-header">
-        <span class="matchup-text">
-          {{ g.get('away_team', {}).get('abbreviation', 'AWY') }}
-          <span class="at-symbol">@</span>
-          {{ g.get('home_team', {}).get('abbreviation', 'HME') }}
-        </span>
-        <span class="game-status status-{{ g.get('status', 'scheduled') }}">
-          {{ g.get('status', 'scheduled')|upper }}
-        </span>
+    {% set g = game %}
+    {% set gstatus = g.get('status', 'scheduled') %}
+    {% set away_abbr = g.get('away_team', {}).get('abbreviation', 'AWY') %}
+    {% set home_abbr = g.get('home_team', {}).get('abbreviation', 'HME') %}
+    {% set away_score = g.get('away_score', 0) %}
+    {% set home_score = g.get('home_score', 0) %}
+    {% set is_final = gstatus == 'final' %}
+    {% set is_live  = gstatus == 'live' %}
+    {% set hp = g.get('home_pitcher', {}) %}
+    {% set ap = g.get('away_pitcher', {}) %}
+    {% set weather = g.get('weather', {}) %}
+
+    <a href="/game/{{ g.get('game_pk', 0) }}" class="game-card" data-game-pk="{{ g.get('game_pk', 0) }}">
+
+      <!-- Status pill — JS updates data-status-el, data-inning-el, data-time-el -->
+      <div class="gc-status-row">
+        <span class="game-status status-{{ gstatus }}" data-status-el>{{ gstatus|upper }}</span>
+        <span class="gc-inning" data-inning-el style="{{ 'display:none' if not is_live }}">Inn {{ g.get('inning', '') }}</span>
+        <span class="gc-time" data-time-el>{{ g.get('game_time_local', 'TBD') }}</span>
       </div>
 
-      <div class="game-meta">
-        <span class="game-time">{{ g.get('game_time_local', 'TBD') }}</span>
-        <span class="venue-name">{{ g.get('venue', {}).get('name', '') }}</span>
-      </div>
-
-      {% set weather = g.get('weather', {}) %}
-      <div class="weather-row">
-        {% if weather.get('is_dome') %}
-        <span class="dome-badge">DOME</span>
-        {% else %}
-        <span class="wx-condition">{{ weather.get('condition_text', '') }}</span>
-        <span class="weather-temp">{{ weather.get('temp_f', 72)|round|int }}°F</span>
-        <span class="weather-wind">{{ weather.get('wind_speed_mph', 0)|round|int }} mph</span>
-        {% if weather.get('precipitation_mm', 0) > 0 %}
-        <span class="wx-precip">{{ "%.1f"|format(weather.get('precipitation_mm', 0)) }}mm</span>
-        {% endif %}
-        {% endif %}
-      </div>
-
-      <div class="pitchers-row">
-        {% set hp = g.get('home_pitcher', {}) %}
-        {% set ap = g.get('away_pitcher', {}) %}
-        <div class="pitcher-chip">
-          <span class="pitcher-side">HME</span>
-          <span class="pitcher-name">{{ hp.get('name', 'TBD') }}</span>
-          <span class="pitcher-stat">ERA {{ hp.get('era', 0)|round(2) }}</span>
-          {% if hp.get('xera') %}<span class="pitcher-stat xera">xERA {{ hp.get('xera')|round(2) }}</span>{% endif %}
+      <!-- Scoreboard row — score spans always in DOM; JS populates & shows them -->
+      <div class="gc-scoreboard">
+        <!-- Away team -->
+        <div class="gc-team" data-away-team>
+          <img src="{{ away_abbr | team_logo }}" class="gc-logo" alt="{{ away_abbr }}"
+               onerror="this.style.display='none'" />
+          <span class="gc-team-name">{{ away_abbr | team_name }}</span>
+          <span class="gc-score" data-away-score style="display:none"></span>
         </div>
-        <div class="pitcher-chip">
-          <span class="pitcher-side">AWY</span>
-          <span class="pitcher-name">{{ ap.get('name', 'TBD') }}</span>
-          <span class="pitcher-stat">ERA {{ ap.get('era', 0)|round(2) }}</span>
-          {% if ap.get('xera') %}<span class="pitcher-stat xera">xERA {{ ap.get('xera')|round(2) }}</span>{% endif %}
+
+        <!-- Center: @ before game, – after -->
+        <div class="gc-vs">
+          <span data-vs-el>@</span>
+        </div>
+
+        <!-- Home team -->
+        <div class="gc-team gc-team-right" data-home-team>
+          <span class="gc-score" data-home-score style="display:none"></span>
+          <span class="gc-team-name">{{ home_abbr | team_name }}</span>
+          <img src="{{ home_abbr | team_logo }}" class="gc-logo" alt="{{ home_abbr }}"
+               onerror="this.style.display='none'" />
+        </div>
+      </div>
+
+      <!-- Venue + weather -->
+      <div class="gc-details">
+        <span class="gc-venue">{{ g.get('venue', {}).get('name', '') }}</span>
+        <span class="gc-weather">
+          {% if weather.get('is_dome') %}
+          <span class="dome-badge">DOME</span>
+          {% else %}
+          {{ weather.get('condition_text', '') }} · {{ weather.get('temp_f', 72)|round|int }}°F · {{ weather.get('wind_speed_mph', 0)|round|int }} mph
+          {% if weather.get('precipitation_mm', 0) > 0 %} · {{ "%.1f"|format(weather.get('precipitation_mm', 0)) }}mm{% endif %}
+          {% endif %}
+        </span>
+      </div>
+
+      <!-- Pitchers -->
+      <div class="gc-pitchers">
+        <div class="gc-pitcher">
+          <span class="gc-pitcher-side">HME</span>
+          <span class="gc-pitcher-name">{{ hp.get('name', 'TBD') }}</span>
+          <span class="gc-pitcher-stat">ERA {{ hp.get('era', 0)|round(2) }}</span>
+          {% if hp.get('xera') %}<span class="gc-pitcher-stat xera">xERA {{ hp.get('xera')|round(2) }}</span>{% endif %}
+        </div>
+        <div class="gc-pitcher">
+          <span class="gc-pitcher-side">AWY</span>
+          <span class="gc-pitcher-name">{{ ap.get('name', 'TBD') }}</span>
+          <span class="gc-pitcher-stat">ERA {{ ap.get('era', 0)|round(2) }}</span>
+          {% if ap.get('xera') %}<span class="gc-pitcher-stat xera">xERA {{ ap.get('xera')|round(2) }}</span>{% endif %}
         </div>
       </div>
     </a>
@@ -104,13 +144,48 @@
 ════════════════════════════════════════════════ -->
 <div id="tab-hits" class="tab-content">
   <div class="table-controls">
-    <input type="text" id="hit-search" class="search-input" placeholder="Filter by player..." oninput="searchTable('hit-table', this.value)" />
-    <div class="filter-btns">
-      <button class="filter-btn active" onclick="filterTable('hit-table', 'ALL', this)">All</button>
-      <button class="filter-btn verdict-yes" onclick="filterTable('hit-table', 'YES', this)">YES</button>
-      <button class="filter-btn verdict-lean" onclick="filterTable('hit-table', 'LEAN', this)">LEAN</button>
-      <button class="filter-btn verdict-no" onclick="filterTable('hit-table', 'NO', this)">NO</button>
+    <!-- Row 1: search + team -->
+    <div class="tc-row">
+      <input type="text" id="hit-search" class="search-input" placeholder="Search player..." oninput="applyFilters('hit')" />
+      <select id="hit-team" class="filter-select" onchange="applyFilters('hit')">
+        <option value="">All Teams</option>
+      </select>
     </div>
+    <!-- Row 2: verdict + hand + lineup slot -->
+    <div class="tc-row">
+      <div class="filter-group">
+        <span class="filter-label">PICK</span>
+        <div class="filter-btns" id="hit-verdict-btns">
+          <button class="filter-btn active" data-filter="verdict" data-val="" onclick="toggleFilter('hit','verdict','',this)">All</button>
+          <button class="filter-btn verdict-yes" data-filter="verdict" data-val="YES" onclick="toggleFilter('hit','verdict','YES',this)">YES</button>
+          <button class="filter-btn verdict-lean" data-filter="verdict" data-val="LEAN" onclick="toggleFilter('hit','verdict','LEAN',this)">LEAN</button>
+          <button class="filter-btn verdict-no" data-filter="verdict" data-val="NO" onclick="toggleFilter('hit','verdict','NO',this)">NO</button>
+        </div>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">BATS</span>
+        <div class="filter-btns" id="hit-hand-btns">
+          <button class="filter-btn active" data-filter="hand" data-val="" onclick="toggleFilter('hit','hand','',this)">All</button>
+          <button class="filter-btn" data-filter="hand" data-val="L" onclick="toggleFilter('hit','hand','L',this)">L</button>
+          <button class="filter-btn" data-filter="hand" data-val="R" onclick="toggleFilter('hit','hand','R',this)">R</button>
+          <button class="filter-btn" data-filter="hand" data-val="S" onclick="toggleFilter('hit','hand','S',this)">S</button>
+        </div>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">ORDER</span>
+        <div class="filter-btns" id="hit-slot-btns">
+          <button class="filter-btn active" data-filter="slot" data-val="" onclick="toggleFilter('hit','slot','',this)">All</button>
+          <button class="filter-btn" data-filter="slot" data-val="top" onclick="toggleFilter('hit','slot','top',this)">1–3</button>
+          <button class="filter-btn" data-filter="slot" data-val="mid" onclick="toggleFilter('hit','slot','mid',this)">4–6</button>
+          <button class="filter-btn" data-filter="slot" data-val="bot" onclick="toggleFilter('hit','slot','bot',this)">7–9</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-key">
+    <span class="sk-item"><span class="sk-dot sk-green"></span> xBA ≥ .280 — above-average expected contact</span>
+    <span class="sk-item"><span class="sk-dot sk-blue"></span> Whiff% ≤ 18% — batter makes contact at elite rate</span>
   </div>
 
   {% if model.get('hit_probabilities') %}
@@ -119,48 +194,50 @@
       <thead>
         <tr>
           <th onclick="sortTable('hit-table', 0)">Player</th>
-          <th onclick="sortTable('hit-table', 1)">Game</th>
-          <th onclick="sortTable('hit-table', 2)">vs Pitcher</th>
-          <th onclick="sortTable('hit-table', 3)">AVG</th>
-          <th onclick="sortTable('hit-table', 4)">xBA</th>
-          <th onclick="sortTable('hit-table', 5)">xwOBA</th>
-          <th onclick="sortTable('hit-table', 6)">Hard Hit%</th>
-          <th onclick="sortTable('hit-table', 7)">Sweet Spot%</th>
-          <th onclick="sortTable('hit-table', 8)">Barrel%</th>
-          <th onclick="sortTable('hit-table', 9)">Whiff%</th>
-          <th onclick="sortTable('hit-table', 10)">Exit Velo</th>
-          <th onclick="sortTable('hit-table', 11)">Hit Prob</th>
-          <th onclick="sortTable('hit-table', 12)">Verdict</th>
+          <th onclick="sortTable('hit-table', 1)">Matchup</th>
+          <th onclick="sortTable('hit-table', 2)">AVG</th>
+          <th onclick="sortTable('hit-table', 3)">xBA</th>
+          <th onclick="sortTable('hit-table', 4)">xwOBA</th>
+          <th onclick="sortTable('hit-table', 5)">Hard Hit%</th>
+          <th onclick="sortTable('hit-table', 6)">Sweet Spot%</th>
+          <th onclick="sortTable('hit-table', 7)">Barrel%</th>
+          <th onclick="sortTable('hit-table', 8)">Whiff%</th>
+          <th onclick="sortTable('hit-table', 9)">Exit Velo</th>
+          <th onclick="sortTable('hit-table', 10)">Hit Prob</th>
+          <th onclick="sortTable('hit-table', 11)">Verdict</th>
+          <th>Lineup</th>
         </tr>
       </thead>
       <tbody>
         {% for r in model.hit_probabilities %}
-        {% set p = r.player if r is not mapping else r.get('player', {}) %}
-        {% set g = r.game if r is not mapping else r.get('game', {}) %}
-        {% set vp = r.vs_pitcher if r is not mapping else r.get('vs_pitcher', {}) %}
-        {% set prob = r.hit_probability if r is not mapping else r.get('hit_probability', 0) %}
-        {% set verdict = r.hit_verdict if r is not mapping else r.get('hit_verdict', 'NO') %}
+        {% set pdict  = r.get('player', {}) %}
+        {% set gdict  = r.get('game', {}) %}
+        {% set vpdict = r.get('vs_pitcher', {}) %}
+        {% set prob   = r.get('hit_probability', 0) %}
+        {% set verdict = r.get('hit_verdict', 'NO') %}
+        {% set away_abbr = gdict.get('away_team', {}).get('abbreviation', '') %}
+        {% set home_abbr = gdict.get('home_team', {}).get('abbreviation', '') %}
 
-        {% set pdict = p if p is mapping else p.__dict__ if hasattr(p, '__dict__') else {} %}
-        {% set gdict = g if g is mapping else g.__dict__ if hasattr(g, '__dict__') else {} %}
-        {% set vpdict = vp if vp is mapping else vp.__dict__ if hasattr(vp, '__dict__') else {} %}
-
-        <tr class="verdict-row verdict-{{ verdict|lower }}" data-verdict="{{ verdict }}">
+        <tr class="verdict-row verdict-{{ verdict|lower }}"
+            data-verdict="{{ verdict }}"
+            data-team="{{ pdict.get('team', '') }}"
+            data-hand="{{ pdict.get('hand', 'R') }}"
+            data-pos="{{ pdict.get('lineup_position', 0) }}">
           <td>
             <div class="player-cell">
-              <img src="{{ pdict.get('player_id', 0) | mlb_photo }}" class="player-headshot" alt="{{ pdict.get('name', '') }}" onerror="this.src='https://img.mlb.com/headshots/current/60x60/generic@2x.jpg'" />
+              <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E" class="player-headshot" alt="{{ pdict.get('name', '') }}" data-real="{{ pdict.get('player_id', 0) | mlb_photo }}" />
               <div class="player-cell-info">
                 <span class="player-name">{{ pdict.get('name', '') }}</span>
-                <span class="player-meta">{{ pdict.get('team', '') }} #{{ pdict.get('lineup_position', '') }}</span>
+                <span class="player-meta">{{ pdict.get('team', '') }} · #{{ pdict.get('lineup_position', '') }} · Bats {{ pdict.get('hand', 'R') }}</span>
               </div>
             </div>
           </td>
-          <td class="mono">
-            {{ gdict.get('away_team', {}).get('abbreviation', '') }}
-            @
-            {{ gdict.get('home_team', {}).get('abbreviation', '') }}
+          <td>
+            <div class="game-cell">
+              <span class="gc-matchup mono">{{ away_abbr }} @ {{ home_abbr }}</span>
+              <span class="gc-pitcher-sub">vs {{ vpdict.get('name', '') }}</span>
+            </div>
           </td>
-          <td>{{ vpdict.get('name', '') }}</td>
           <td class="mono">{{ "%.3f"|format(pdict.get('avg', 0)) }}</td>
           <td class="mono {% if pdict.get('xba', 0) >= 0.28 %}stat-hi{% endif %}">{{ "%.3f"|format(pdict.get('xba', 0)) }}</td>
           <td class="mono">{{ "%.3f"|format(pdict.get('xwoba', 0)) }}</td>
@@ -178,6 +255,16 @@
             </div>
           </td>
           <td><span class="verdict-badge badge-{{ verdict|lower }}">{{ verdict }}</span></td>
+          {% set ls = r.get('lineup_status', 'official') %}
+          <td>
+            {% if ls == 'official' %}
+            <span class="lineup-badge lineup-official" title="Official lineup confirmed">✓ Official</span>
+            {% elif ls == 'probable_recent' %}
+            <span class="lineup-badge lineup-probable" title="Based on recent game batting order">~ Probable</span>
+            {% else %}
+            <span class="lineup-badge lineup-roster" title="Based on active roster">~ Roster</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -185,7 +272,11 @@
   </div>
   {% else %}
   <div class="empty-state">
-    {% if not model.get('lineups_confirmed') %}Lineups not yet posted — check back closer to first pitch.{% else %}No hit probability data available.{% endif %}
+    {% if model.get('lineup_mode', 'none') == 'none' %}
+    Lineup data not yet available — check back closer to first pitch or refresh the page.
+    {% else %}
+    No hit probability data available.
+    {% endif %}
   </div>
   {% endif %}
 </div>
@@ -194,24 +285,61 @@
      TAB 3 — HOME RUNS
 ════════════════════════════════════════════════ -->
 <div id="tab-hrs" class="tab-content">
+  <div class="table-controls">
+    <div class="tc-row">
+      <input type="text" id="hr-search" class="search-input" placeholder="Search player..." oninput="applyFilters('hr')" />
+      <select id="hr-team" class="filter-select" onchange="applyFilters('hr')">
+        <option value="">All Teams</option>
+      </select>
+    </div>
+    <div class="tc-row">
+      <div class="filter-group">
+        <span class="filter-label">PICK</span>
+        <div class="filter-btns">
+          <button class="filter-btn active" onclick="toggleFilter('hr','verdict','',this)">All</button>
+          <button class="filter-btn verdict-yes" onclick="toggleFilter('hr','verdict','YES',this)">YES</button>
+          <button class="filter-btn verdict-lean" onclick="toggleFilter('hr','verdict','LEAN',this)">LEAN</button>
+          <button class="filter-btn verdict-no" onclick="toggleFilter('hr','verdict','NO',this)">NO</button>
+        </div>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">BATS</span>
+        <div class="filter-btns">
+          <button class="filter-btn active" onclick="toggleFilter('hr','hand','',this)">All</button>
+          <button class="filter-btn" onclick="toggleFilter('hr','hand','L',this)">L</button>
+          <button class="filter-btn" onclick="toggleFilter('hr','hand','R',this)">R</button>
+          <button class="filter-btn" onclick="toggleFilter('hr','hand','S',this)">S</button>
+        </div>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">ORDER</span>
+        <div class="filter-btns">
+          <button class="filter-btn active" onclick="toggleFilter('hr','slot','',this)">All</button>
+          <button class="filter-btn" onclick="toggleFilter('hr','slot','top',this)">1–3</button>
+          <button class="filter-btn" onclick="toggleFilter('hr','slot','mid',this)">4–6</button>
+          <button class="filter-btn" onclick="toggleFilter('hr','slot','bot',this)">7–9</button>
+        </div>
+      </div>
+    </div>
+  </div>
   {% if model.get('hr_probabilities') %}
-  <div class="hr-grid">
+  <div class="hr-grid" id="hr-grid">
     {% for r in model.hr_probabilities %}
-    {% set p = r.player if r is not mapping else r.get('player', {}) %}
-    {% set g = r.game if r is not mapping else r.get('game', {}) %}
-    {% set vp = r.vs_pitcher if r is not mapping else r.get('vs_pitcher', {}) %}
-    {% set prob = r.hr_probability if r is not mapping else r.get('hr_probability', 0) %}
-    {% set verdict = r.hr_verdict if r is not mapping else r.get('hr_verdict', 'NO') %}
-    {% set odds_str = r.odds if r is not mapping else r.get('odds', '') %}
-    {% set edge = r.value_edge if r is not mapping else r.get('value_edge', 0) %}
+    {% set pdict   = r.get('player', {}) %}
+    {% set gdict   = r.get('game', {}) %}
+    {% set vpdict  = r.get('vs_pitcher', {}) %}
+    {% set prob    = r.get('hr_probability', 0) %}
+    {% set verdict = r.get('hr_verdict', 'NO') %}
+    {% set odds_str = r.get('odds', '') %}
+    {% set edge    = r.get('value_edge', 0) %}
 
-    {% set pdict = p if p is mapping else p.__dict__ if hasattr(p, '__dict__') else {} %}
-    {% set gdict = g if g is mapping else g.__dict__ if hasattr(g, '__dict__') else {} %}
-    {% set vpdict = vp if vp is mapping else vp.__dict__ if hasattr(vp, '__dict__') else {} %}
-
-    <div class="hr-card {% if verdict == 'YES' %}hr-card-yes{% endif %}">
+    <div class="hr-card {% if verdict == 'YES' %}hr-card-yes{% endif %}"
+         data-verdict="{{ verdict }}"
+         data-team="{{ pdict.get('team', '') }}"
+         data-hand="{{ pdict.get('hand', 'R') }}"
+         data-pos="{{ pdict.get('lineup_position', 0) }}">
       <div class="hr-card-header">
-        <img src="{{ pdict.get('player_id', 0) | mlb_photo }}" class="hr-headshot" alt="{{ pdict.get('name', '') }}" onerror="this.src='https://img.mlb.com/headshots/current/60x60/generic@2x.jpg'" />
+        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E" class="hr-headshot" alt="{{ pdict.get('name', '') }}" data-real="{{ pdict.get('player_id', 0) | mlb_photo }}" />
         <div>
           <span class="hr-player-name">{{ pdict.get('name', '') }}</span>
           <span class="hr-team">{{ pdict.get('team', '') }}</span>
@@ -258,6 +386,14 @@
         </div>
         <div class="hr-verdict-col">
           <span class="verdict-badge badge-{{ verdict|lower }}">{{ verdict }}</span>
+          {% set ls = r.get('lineup_status', 'official') %}
+          {% if ls == 'official' %}
+          <span class="lineup-badge lineup-official">✓ Official</span>
+          {% elif ls == 'probable_recent' %}
+          <span class="lineup-badge lineup-probable">~ Probable</span>
+          {% else %}
+          <span class="lineup-badge lineup-roster">~ Roster</span>
+          {% endif %}
           {% if odds_str %}
           <span class="odds-badge">{{ odds_str }}</span>
           {% if edge and edge > 0 %}
@@ -276,26 +412,195 @@
   {% endif %}
 </div>
 
-<!-- ════════════════════════════════════════════════
-     TAB 4 — LIVE SCORES
-════════════════════════════════════════════════ -->
-<div id="tab-live" class="tab-content">
-  <div class="live-header">
-    <span class="live-dot"></span>
-    <span>Auto-refreshes every 30 seconds</span>
-  </div>
-  <div id="live-scores-container">
-    <div class="empty-state">Loading live scores…</div>
-  </div>
-</div>
-
 {% endblock %}
 
 {% block extra_js %}
 <script>
-  // Auto-refresh lineups check every 5 minutes if not confirmed
-  {% if not model.get('lineups_confirmed') %}
-  setTimeout(() => location.reload(), 5 * 60 * 1000);
-  {% endif %}
+  // ── Player headshot lazy-upgrade ──────────────────────────────────────────
+  // Script is at bottom of <body> so DOM is already built — run immediately.
+  // Each img starts with an inline SVG placeholder (no network, instant).
+  // We then probe the real MLB CDN URL; if it loads we swap it in smoothly.
+  // onerror on the placeholder src never fires, so no alt-text flash ever.
+  (function () {
+    const imgs = document.querySelectorAll('img[data-real]');
+    imgs.forEach((img, i) => {
+      setTimeout(() => {
+        const realSrc = img.dataset.real;
+        if (!realSrc) return;  // no player_id — keep SVG placeholder
+        const probe = new Image();
+        probe.onload  = () => { img.src = realSrc; };
+        probe.onerror = () => { /* keep SVG placeholder — nothing to do */ };
+        probe.src = realSrc;
+      }, i * 25);  // 25 ms stagger so we don't hammer the CDN
+    });
+  })();
+
+  // ── Silent lineup-mode poller ──────────────────────────────────────────────
+  // Instead of hard-reloading the whole page (which causes image flicker),
+  // we silently poll the API in the background.  We only hard-reload when the
+  // lineup_mode actually upgrades (probable → official), which is a meaningful
+  // change that warrants a full re-render.  In probable mode the page is never
+  // disturbed, so player photos never flicker.
+  (function () {
+    {% set lineup_mode = model.get('lineup_mode', 'none') %}
+    const CURRENT_MODE = {{ lineup_mode | tojson }};
+    const TODAY        = new Date().toISOString().slice(0, 10);
+    const PAGE_DATE    = (document.getElementById('date-nav') || {}).dataset?.date || TODAY;
+
+    // Only auto-poll when viewing today's date — past/future dates won't change
+    if (PAGE_DATE !== TODAY) return;
+
+    {% if lineup_mode == 'none' %}
+    // No data yet — poll every 5 min. The 2-hour model TTL means get_model_for_date
+    // will auto-rebuild when it expires; we just need to check and reload.
+    const POLL_MS = 5 * 60 * 1000;
+    function checkForData() {
+      fetch('/api/model')
+        .then(r => r.json())
+        .then(data => {
+          const newMode = data.lineup_mode || 'none';
+          const hasHits = (data.hit_probabilities || []).length > 0;
+          if (newMode !== 'none' || hasHits) {
+            location.reload();
+          }
+        })
+        .catch(() => {});
+    }
+    setInterval(checkForData, POLL_MS);
+
+    {% elif lineup_mode in ('probable', 'mixed') %}
+    // Probable lineups — poll every 5 min. The 2-hour model TTL + 30-min schedule TTL
+    // means official lineups will be picked up automatically when caches expire.
+    // We only need to reload the page when mode upgrades to official.
+    const POLL_MS = 5 * 60 * 1000;
+    function checkForOfficialLineups() {
+      fetch('/api/model')
+        .then(r => r.json())
+        .then(data => {
+          const newMode = data.lineup_mode || 'none';
+          if (newMode === 'official') {
+            location.reload();  // Official lineups confirmed — reload to show them
+          }
+        })
+        .catch(() => {});
+    }
+    setInterval(checkForOfficialLineups, POLL_MS);
+    {% endif %}
+    // lineup_mode === 'official' → no polling needed
+  })();
+
+  // ── Date picker min/max (constraint only — navigation handled by main.js) ──
+  (function () {
+    const dp = document.getElementById('date-picker');
+    if (!dp) return;
+    const minD = '2025-03-20';
+    const maxD = new Date(); maxD.setDate(maxD.getDate() + 7);
+    dp.min = minD;
+    dp.max = maxD.toISOString().slice(0, 10);
+  })();
+
+  // ── Live score updater ────────────────────────────────────────────────────
+  // Polls /api/scores every 2 minutes and updates game cards in-place.
+  // No page reload — just surgically updates scores and status badges.
+  (function () {
+    const DATE = (document.getElementById('date-nav') || {}).dataset?.date || '{{ selected_date }}';
+
+    function updateScores() {
+      fetch('/api/scores/' + DATE)
+        .then(r => r.json())
+        .then(games => {
+          games.forEach(g => {
+            const card = document.querySelector('[data-game-pk="' + g.game_pk + '"]');
+            if (!card) return;
+            const isFinal = g.status === 'final';
+            const isLive  = g.status === 'live';
+            const hasScore = isFinal || isLive;
+
+            // Status badge
+            const statusEl = card.querySelector('[data-status-el]');
+            if (statusEl) {
+              statusEl.textContent = g.status.toUpperCase();
+              statusEl.className = 'game-status status-' + g.status;
+            }
+
+            // Inning label (live only)
+            const inningEl = card.querySelector('[data-inning-el]');
+            if (inningEl) {
+              inningEl.style.display = isLive ? '' : 'none';
+              if (isLive) inningEl.textContent = 'Inn ' + (g.inning || '');
+            }
+
+            // Game time — hide once game has started
+            const timeEl = card.querySelector('[data-time-el]');
+            if (timeEl) timeEl.style.display = hasScore ? 'none' : '';
+
+            // Center divider: @ vs –
+            const vsEl = card.querySelector('[data-vs-el]');
+            if (vsEl) vsEl.textContent = hasScore ? '–' : '@';
+
+            // Score spans
+            const awayScoreEl = card.querySelector('[data-away-score]');
+            const homeScoreEl = card.querySelector('[data-home-score]');
+            const awayTeamEl  = card.querySelector('[data-away-team]');
+            const homeTeamEl  = card.querySelector('[data-home-team]');
+
+            if (awayScoreEl && homeScoreEl) {
+              if (hasScore) {
+                // Populate and show
+                awayScoreEl.textContent = g.away_score;
+                homeScoreEl.textContent = g.home_score;
+                awayScoreEl.style.display = '';
+                homeScoreEl.style.display = '';
+                // Loser fades; winner stays full brightness
+                const awayLost = isFinal && g.away_score < g.home_score;
+                const homeLost = isFinal && g.home_score < g.away_score;
+                if (awayTeamEl) awayTeamEl.classList.toggle('gc-loser', awayLost);
+                if (homeTeamEl) homeTeamEl.classList.toggle('gc-loser', homeLost);
+              } else {
+                awayScoreEl.style.display = 'none';
+                homeScoreEl.style.display = 'none';
+                if (awayTeamEl) awayTeamEl.classList.remove('gc-loser');
+                if (homeTeamEl) homeTeamEl.classList.remove('gc-loser');
+              }
+            }
+          });
+        })
+        .catch(() => {});
+    }
+
+    // Run immediately then every 2 min
+    updateScores();
+    setInterval(updateScores, 2 * 60 * 1000);
+  })();
+
+  // ── Refresh button ────────────────────────────────────────────────────────
+  // Clears today's model + schedule cache server-side, rebuilds, then reloads.
+  (function () {
+    const btn = document.getElementById('btn-refresh');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      const dateStr = btn.dataset.date;
+      if (!dateStr) return;
+      btn.disabled = true;
+      btn.textContent = '⏳ Rebuilding…';
+      fetch('/api/refresh/' + dateStr, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok) {
+            btn.textContent = '✓ Done — reloading…';
+            setTimeout(() => location.reload(), 600);
+          } else {
+            btn.textContent = '✗ Error';
+            btn.disabled = false;
+            console.error('Refresh failed:', data.error);
+          }
+        })
+        .catch(err => {
+          btn.textContent = '✗ Error';
+          btn.disabled = false;
+          console.error('Refresh error:', err);
+        });
+    });
+  })();
 </script>
 {% endblock %}

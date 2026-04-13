@@ -258,9 +258,13 @@ def normalize_batter(
         bb_pct=_sv("bb_percent", pct=True),
         whiff_pct=_sv("whiff_percent", pct=True),
         swing_pct=_sv("swing_percent", pct=True),
-        # Derived
-        hr_count=int(_fg("HR")),
-        hr_per_game=round(_fg("HR") / max(_fg("G"), 1), 4),
+        # Derived — prefer FanGraphs HR/G; fall back to MLB Stats API counts in sv dict
+        hr_count=int(_fg("HR")) or int(_safe_float(sv.get("homeRuns", 0))),
+        hr_per_game=round(
+            float(_fg("HR") or _safe_float(sv.get("homeRuns", 0))) /
+            max(float(_fg("G") or _safe_float(sv.get("gamesPlayed", 0)) or 1), 1),
+            4,
+        ),
         # Recent form
         recent_avg=recent.get("recent_avg", 0.0),
         recent_hard_hit_pct=recent.get("recent_hard_hit_pct", 0.0),

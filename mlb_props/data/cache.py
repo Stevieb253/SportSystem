@@ -36,11 +36,12 @@ class Cache:
         safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in key)
         return self.cache_dir / f"{safe_key}.json"
 
-    def get(self, key: str) -> CacheValue | None:
+    def get(self, key: str, ttl_hours: float | None = None) -> CacheValue | None:
         """Return cached data or None if missing or expired.
 
         Args:
             key: Cache key string.
+            ttl_hours: Optional TTL override in hours. Uses instance default if None.
 
         Returns:
             Cached data or None.
@@ -48,7 +49,7 @@ class Cache:
         path = self._path(key)
         if not path.exists():
             return None
-        if self.is_expired(key):
+        if self.is_expired(key, ttl_hours=ttl_hours):
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -96,11 +97,12 @@ class Cache:
             except Exception as exc:
                 logger.warning("Cache clear failed (%s): %s", path, exc)
 
-    def is_expired(self, key: str) -> bool:
+    def is_expired(self, key: str, ttl_hours: float | None = None) -> bool:
         """Return True if the cached entry is older than ttl_hours.
 
         Args:
             key: Cache key string.
+            ttl_hours: Optional TTL override in hours. Uses instance default if None.
 
         Returns:
             True if expired or missing, False if still fresh.
@@ -108,10 +110,11 @@ class Cache:
         path = self._path(key)
         if not path.exists():
             return True
+        effective_ttl = ttl_hours if ttl_hours is not None else self.ttl_hours
         try:
             with open(path, "r", encoding="utf-8") as f:
                 envelope = json.load(f)
             ts = datetime.fromisoformat(envelope.get("timestamp", ""))
-            return datetime.utcnow() - ts > timedelta(hours=self.ttl_hours)
+            return datetime.utcnow() - ts > timedelta(hours=effective_ttl)
         except Exception:
             return True

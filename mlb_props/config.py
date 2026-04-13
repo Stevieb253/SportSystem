@@ -128,6 +128,7 @@ STADIUM_COORDS = {
     "Minute Maid Park":         {"lat": 29.7573, "lon": -95.3555},
     "Angel Stadium":            {"lat": 33.8003, "lon": -117.8827},
     "Nationals Park":           {"lat": 38.8730, "lon": -77.0074},
+    "Sutter Health Park":       {"lat": 38.5802, "lon": -121.4987},
 }
 
 # ── Dome Stadiums (weather irrelevant) ────────────────────────────────────────
@@ -191,7 +192,7 @@ SAVANT_HEADERS = {
     "Origin":          "https://baseballsavant.mlb.com",
 }
 
-SAVANT_REQUEST_DELAY_SECONDS = 1.5
+SAVANT_REQUEST_DELAY_SECONDS = 0.3  # Only fires on cache miss; low enough to not rate-limit
 
 # ── Historical Data ────────────────────────────────────────────────────────────
 STATCAST_START_YEAR  = 2015

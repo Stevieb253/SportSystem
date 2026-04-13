@@ -219,37 +219,45 @@ class DataPipeline:
             if not matches.empty:
                 fg_row = matches.iloc[0]
 
-        # MLB Stats API fallback: if Savant missing core batting stats, fetch from official API
-        if player_id and (not savant_player or not any(
+        # MLB Stats API fallback: always fetch when FanGraphs is unavailable (fg_row is None)
+        # to populate homeRuns + gamesPlayed for hr_per_game; also fills core stats when
+        # Savant is missing them entirely.
+        _needs_core   = not savant_player or not any(
             savant_player.get(k) for k in ("ba", "batting_avg", "xba", "est_ba", "woba")
-        )):
+        )
+        _needs_counts = fg_row is None  # FanGraphs blocked → HR/G counts unavailable
+        if player_id and (_needs_core or _needs_counts):
             try:
                 from api import mlb_api
                 mlb_stats = mlb_api.get_player_stats(player_id, "hitting", self._season)
                 if mlb_stats:
                     mlb_mapped: dict = {
-                        "ba":           mlb_stats.get("avg", 0),
-                        "batting_avg":  mlb_stats.get("avg", 0),
-                        "obp":          mlb_stats.get("obp", 0),
-                        "slg":          mlb_stats.get("slg", 0),
-                        "ops":          mlb_stats.get("ops", 0),
-                        "pa":           mlb_stats.get("plateAppearances", 0),
                         "homeRuns":     mlb_stats.get("homeRuns", 0),
-                        "strikeOuts":   mlb_stats.get("strikeOuts", 0),
-                        "baseOnBalls":  mlb_stats.get("baseOnBalls", 0),
-                        "atBats":       mlb_stats.get("atBats", 0),
+                        "gamesPlayed":  mlb_stats.get("gamesPlayed", 0),
                     }
-                    # Derive K% and BB% from raw counts
-                    pa = int(mlb_stats.get("plateAppearances", 0) or 0)
-                    if pa > 0:
-                        mlb_mapped["k_percent"] = round(
-                            int(mlb_stats.get("strikeOuts", 0) or 0) / pa, 4
-                        )
-                        mlb_mapped["bb_percent"] = round(
-                            int(mlb_stats.get("baseOnBalls", 0) or 0) / pa, 4
-                        )
+                    if _needs_core:
+                        mlb_mapped.update({
+                            "ba":          mlb_stats.get("avg", 0),
+                            "batting_avg": mlb_stats.get("avg", 0),
+                            "obp":         mlb_stats.get("obp", 0),
+                            "slg":         mlb_stats.get("slg", 0),
+                            "ops":         mlb_stats.get("ops", 0),
+                            "pa":          mlb_stats.get("plateAppearances", 0),
+                            "strikeOuts":  mlb_stats.get("strikeOuts", 0),
+                            "baseOnBalls": mlb_stats.get("baseOnBalls", 0),
+                            "atBats":      mlb_stats.get("atBats", 0),
+                        })
+                        # Derive K% and BB% from raw counts
+                        pa = int(mlb_stats.get("plateAppearances", 0) or 0)
+                        if pa > 0:
+                            mlb_mapped["k_percent"] = round(
+                                int(mlb_stats.get("strikeOuts", 0) or 0) / pa, 4
+                            )
+                            mlb_mapped["bb_percent"] = round(
+                                int(mlb_stats.get("baseOnBalls", 0) or 0) / pa, 4
+                            )
                     savant_player = {**(savant_player or {}), **mlb_mapped}
-                    logger.debug("MLB API fallback stats loaded for batter %s (%s)", player_name, player_id)
+                    logger.debug("MLB API stats loaded for batter %s (%s)", player_name, player_id)
             except Exception as exc:
                 logger.warning("MLB API batter fallback failed (%s): %s", player_id, exc)
 
@@ -270,6 +278,7 @@ class DataPipeline:
             vs_pitcher=vs_pitcher,
             season=self._season,
         )
+
         return metrics
 
     def load_pitcher_data(

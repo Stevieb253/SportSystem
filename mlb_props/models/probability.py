@@ -5,6 +5,12 @@ from .player import BatterMetrics
 from .game import Game, ProbablePitcher
 
 
+# Lineup status constants — used in result objects and templates
+LINEUP_OFFICIAL         = "official"           # posted by team, confirmed
+LINEUP_PROBABLE_RECENT  = "probable_recent"    # derived from yesterday's boxscore order
+LINEUP_PROBABLE_ROSTER  = "probable_roster"    # derived from active roster (PA-sorted)
+
+
 @dataclass
 class HitProbabilityResult:
     """Output of the hit probability model for a single batter in a game."""
@@ -16,6 +22,7 @@ class HitProbabilityResult:
     hit_verdict: str              # YES / LEAN / NO
     component_scores: dict = field(default_factory=dict)
     weather_adjustment: float = 0.0
+    lineup_status: str = LINEUP_OFFICIAL   # how this lineup was sourced
 
 
 @dataclass
@@ -32,3 +39,4 @@ class HRProbabilityResult:
     odds: str = ""                # e.g. +350
     implied_prob: float = 0.0
     value_edge: float = 0.0
+    lineup_status: str = LINEUP_OFFICIAL   # how this lineup was sourced

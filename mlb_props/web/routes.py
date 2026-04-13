@@ -81,6 +81,7 @@ def game_detail(game_pk: int):
         game=game,
         hit_results=hit_results,
         hr_results=hr_results,
+        selected_date=today,
     )
 
 
@@ -92,6 +93,84 @@ def api_model():
     today = date.today().isoformat()
     model = _safe_model(today)
     return jsonify(_to_json(model))
+
+
+@bp.route("/api/scores/<date_str>")
+def api_scores(date_str: str):
+    """Return fresh game scores for a date — short-TTL, bypasses the 24h model cache."""
+    from api import mlb_api
+    from data import normalizer
+    import time
+
+    # Use a 2-minute cache so scores update quickly without hammering the API
+    cache_key = f"scores_{date_str}_{int(time.time() // 120)}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
+    try:
+        # Fetch fresh from MLB API with linescore hydration — bypass the model cache
+        import config as cfg
+        import requests as _req
+        url = f"{cfg.MLB_API_BASE_URL}/schedule"
+        params = {
+            "date":    date_str,
+            "sportId": 1,
+            "hydrate": "linescore,team",
+        }
+        resp = _req.get(url, params=params, timeout=8)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        result = []
+        for date_entry in raw.get("dates", []):
+            for rg in date_entry.get("games", []):
+                status_code = rg.get("status", {}).get("abstractGameState", "Preview")
+                status_map  = {"Preview": "scheduled", "Live": "live", "Final": "final"}
+                status = status_map.get(status_code, "scheduled")
+                linescore = rg.get("linescore", {})
+                result.append({
+                    "game_pk":     rg.get("gamePk", 0),
+                    "status":      status,
+                    "away_score":  linescore.get("teams", {}).get("away", {}).get("runs", 0),
+                    "home_score":  linescore.get("teams", {}).get("home", {}).get("runs", 0),
+                    "inning":      linescore.get("currentInning", ""),
+                    "inning_half": linescore.get("inningHalf", ""),
+                })
+        _cache.set(cache_key, result)
+        return jsonify(result)
+    except Exception as exc:
+        logger.error("Scores fetch failed for %s: %s", date_str, exc)
+        return jsonify([])
+
+
+@bp.route("/api/refresh/<date_str>", methods=["POST"])
+def api_refresh(date_str: str):
+    """Force-clear cached model and schedule for a date, then rebuild.
+
+    Used by the Refresh button so users can pick up newly confirmed lineups
+    without restarting the server or waiting for TTL to expire.
+    """
+    try:
+        _builder.invalidate_date(date_str)
+        model = _safe_model(date_str)
+        lineup_mode = model.get("lineup_mode", "unknown")
+        n_games = len(model.get("games", []))
+        n_players = len(model.get("hit_probabilities", []))
+        logger.info(
+            "Manual refresh for %s: %d games, %d players, lineups=%s",
+            date_str, n_games, n_players, lineup_mode,
+        )
+        return jsonify({
+            "ok": True,
+            "date": date_str,
+            "games": n_games,
+            "players": n_players,
+            "lineup_mode": lineup_mode,
+        })
+    except Exception as exc:
+        logger.error("Refresh failed for %s: %s", date_str, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @bp.route("/api/live")
