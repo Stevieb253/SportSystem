@@ -131,11 +131,16 @@
   <h2 class="section-title">
     Lineups &amp; Probabilities
     {% if hit_results %}
-      {% set all_official = hit_results | selectattr('lineup_status', 'equalto', 'official') | list | length == hit_results | length %}
-      {% if all_official %}
-      <span class="lineup-badge lineup-official">✓ Official Lineup</span>
+      {% if gstatus in ('live', 'final') %}
+        {# Game is in progress/finished — lineup is locked regardless of model tag #}
+        <span class="lineup-badge lineup-official">✓ Lineup Set</span>
       {% else %}
-      <span class="lineup-badge lineup-probable">~ Probable Lineup — Pregame Preview</span>
+        {% set all_official = hit_results | selectattr('lineup_status', 'equalto', 'official') | list | length == hit_results | length %}
+        {% if all_official %}
+        <span class="lineup-badge lineup-official">✓ Official Lineup</span>
+        {% else %}
+        <span class="lineup-badge lineup-probable">~ Probable Lineup — Pregame Preview</span>
+        {% endif %}
       {% endif %}
     {% endif %}
   </h2>

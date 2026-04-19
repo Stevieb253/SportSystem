@@ -185,7 +185,7 @@ class ModelBuilder:
         """
         from datetime import date as _date
         is_today = date_str == _date.today().isoformat()
-        ttl = 2.0 if is_today else None  # 2-hour TTL for today, default otherwise
+        ttl = 2.0 if is_today else None  # 2-hour TTL for today, default 12h otherwise
 
         cache_key = f"model_{date_str}"
 
@@ -207,6 +207,8 @@ class ModelBuilder:
             model = self.build_daily_model(date_str)
             # Always serialise to plain dicts before caching and returning.
             serialised = _serialise_model(model)
+            # Attach matchup notes to each result (uses only existing data — no new API calls).
+            _attach_matchup_notes(serialised)
             self.pipeline.cache.set(cache_key, serialised)
             return serialised
 
@@ -477,6 +479,41 @@ def _extract_bat_side(player_info: dict) -> str:
     if isinstance(bat_side, dict):
         return bat_side.get("code", "R")
     return str(bat_side) if bat_side else "R"
+
+
+def _attach_matchup_notes(serialised: dict) -> None:
+    """In-place: append matchup_notes list to every hit/HR probability result.
+
+    Called after serialisation so every value is a plain Python type.
+    Silently skips individual results if note generation fails — the page
+    still renders cleanly, just without notes for that batter.
+    """
+    try:
+        from services.matchup_notes import generate_hit_notes, generate_hr_notes
+    except Exception:
+        try:
+            from matchup_notes import generate_hit_notes, generate_hr_notes
+        except Exception:
+            logger.debug("matchup_notes module not importable — skipping note generation")
+            return
+
+    for r in serialised.get("hit_probabilities") or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            r["matchup_notes"] = generate_hit_notes(r)
+        except Exception as exc:
+            logger.debug("Hit note generation failed for %s: %s", r.get("player", {}).get("name"), exc)
+            r["matchup_notes"] = []
+
+    for r in serialised.get("hr_probabilities") or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            r["matchup_notes"] = generate_hr_notes(r)
+        except Exception as exc:
+            logger.debug("HR note generation failed for %s: %s", r.get("player", {}).get("name"), exc)
+            r["matchup_notes"] = []
 
 
 def _serialise_model(model: dict) -> dict:

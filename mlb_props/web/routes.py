@@ -15,6 +15,7 @@ from data.pipeline import DataPipeline
 from services import hit_probability, hr_probability
 from services.model_builder import ModelBuilder
 from services import historical_service
+from services import best_bets as best_bets_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,13 @@ _cache    = Cache(config.CACHE_DIR, config.CACHE_TTL_HOURS)
 _pipeline = DataPipeline(_cache)
 _builder  = ModelBuilder(_pipeline, hit_probability, hr_probability)
 
+# Wire odds API cache injection (manual refresh only — never auto-called)
+from api import odds_api as _odds_api
+_odds_api.set_cache(_cache)
+
+# TTL for cached odds-by-player summary (mirrors odds_api.ODDS_CACHE_TTL_HOURS)
+_ODDS_SUMMARY_TTL = 8.0
+
 
 # ── Page routes ───────────────────────────────────────────────────────────────
 
@@ -33,14 +41,28 @@ def index():
     """Today's full model."""
     today = date.today().isoformat()
     model = _safe_model(today)
-    return render_template("index.html", model=model, selected_date=today)
+    best_bets = _build_best_bets(model, today)
+    return render_template(
+        "index.html",
+        model=model,
+        selected_date=today,
+        best_bets=best_bets,
+        odds_key_configured=bool(config.ODDS_API_KEY),
+    )
 
 
 @bp.route("/date/<date_str>")
 def index_date(date_str: str):
     """Model for any specific date."""
     model = _safe_model(date_str)
-    return render_template("index.html", model=model, selected_date=date_str)
+    best_bets = _build_best_bets(model, date_str)
+    return render_template(
+        "index.html",
+        model=model,
+        selected_date=date_str,
+        best_bets=best_bets,
+        odds_key_configured=bool(config.ODDS_API_KEY),
+    )
 
 
 @bp.route("/player/<player_name>")
@@ -255,6 +277,55 @@ def api_refresh(date_str: str):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@bp.route("/api/bvp/<int:batter_id>/<int:pitcher_id>")
+def api_bvp(batter_id: int, pitcher_id: int):
+    """Return career batter-vs-pitcher stats from the MLB Stats API.
+
+    Cached for 24 hours — the underlying career numbers never change within a season.
+    Returns: {has_data, ab, hits, hr, k, bb, avg} or {has_data: false}.
+    """
+    cache_key = f"bvp_{batter_id}_{pitcher_id}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
+    try:
+        import requests as _req
+        import config as cfg
+        url = f"{cfg.MLB_API_BASE_URL}/people/{batter_id}/stats"
+        params = {
+            "stats":             "vsPlayer",
+            "opposingPlayerId":  pitcher_id,
+            "group":             "hitting",
+        }
+        resp = _req.get(url, params=params, timeout=8)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        result: dict = {"has_data": False}
+        for stat_group in raw.get("stats", []):
+            splits = stat_group.get("splits", [])
+            if splits:
+                s = splits[0].get("stat", {})
+                result = {
+                    "has_data": True,
+                    "ab":       int(s.get("atBats",      0)),
+                    "hits":     int(s.get("hits",         0)),
+                    "hr":       int(s.get("homeRuns",     0)),
+                    "k":        int(s.get("strikeOuts",   0)),
+                    "bb":       int(s.get("baseOnBalls",  0)),
+                    "avg":      s.get("avg", ".000"),
+                }
+                break
+
+        _cache.set(cache_key, result)
+        return jsonify(result)
+
+    except Exception as exc:
+        logger.error("BvP fetch failed %d vs %d: %s", batter_id, pitcher_id, exc)
+        return jsonify({"has_data": False})
+
+
 @bp.route("/api/live")
 def api_live():
     """Return ESPN live scoreboard."""
@@ -312,6 +383,72 @@ def api_historical():
     return jsonify(seasons)
 
 
+@bp.route("/api/odds/status")
+def api_odds_status():
+    """Return current odds cache status and quota info (no API calls made)."""
+    today = date.today().isoformat()
+    cached_odds = _cache.get(f"best_bets_odds_{today}", ttl_hours=_ODDS_SUMMARY_TTL)
+    quota = _odds_api.get_quota_info()
+    return jsonify({
+        "has_odds":       cached_odds is not None,
+        "player_count":   len(cached_odds) if cached_odds else 0,
+        "quota":          quota,
+        "key_configured": quota["key_configured"],
+    })
+
+
+@bp.route("/api/odds/refresh", methods=["POST"])
+def api_odds_refresh():
+    """Manually trigger an odds fetch for today's players.
+
+    Burns Odds API quota — only called when the user explicitly clicks
+    "Refresh Odds".  Results are cached for 8 hours.
+    """
+    from api import odds_api as _mlb_odds
+
+    if not _mlb_odds.get_quota_info()["key_configured"]:
+        return jsonify({"ok": False, "error": "No ODDS_API_KEY configured in .env"}), 400
+
+    try:
+        today = date.today().isoformat()
+        model = _safe_model(today)
+
+        # Collect all player names from today's model
+        player_names: list[str] = []
+        seen: set[str] = set()
+        for r in model.get("hit_probabilities", []):
+            name = (r.get("player", {}) if isinstance(r, dict) else {}).get("name", "")
+            if name and name not in seen:
+                player_names.append(name)
+                seen.add(name)
+        for r in model.get("hr_probabilities", []):
+            name = (r.get("player", {}) if isinstance(r, dict) else {}).get("name", "")
+            if name and name not in seen:
+                player_names.append(name)
+                seen.add(name)
+
+        # Fetch all props (respects 8h cache — won't burn quota if already fresh)
+        odds_by_player = _mlb_odds.fetch_all_props_for_today(player_names)
+
+        # Persist the merged summary so index() can read it on next page load
+        _cache.set(f"best_bets_odds_{today}", odds_by_player)
+
+        quota = _mlb_odds.get_quota_info()
+        logger.info(
+            "Odds refresh: %d players, quota remaining=%s",
+            len(odds_by_player), quota.get("remaining"),
+        )
+        return jsonify({
+            "ok":           True,
+            "player_count": len(odds_by_player),
+            "quota":        quota,
+        })
+
+    except Exception as exc:
+        logger.error("Odds refresh failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @bp.route("/api/leaders")
 def api_leaders():
     """Return statistical leaders for a season using the MLB Stats API."""
@@ -352,6 +489,20 @@ def api_player_stats(player_name: str):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _build_best_bets(model: dict, date_str: str) -> dict:
+    """Build best bets, reading cached odds if available (never fetching fresh)."""
+    try:
+        odds_by_player = _cache.get(f"best_bets_odds_{date_str}", ttl_hours=_ODDS_SUMMARY_TTL) or {}
+        return best_bets_service.build_best_bets(
+            hit_probabilities=model.get("hit_probabilities", []),
+            hr_probabilities=model.get("hr_probabilities", []),
+            odds_by_player=odds_by_player,
+        )
+    except Exception as exc:
+        logger.error("Best bets build failed for %s: %s", date_str, exc)
+        return {"hit_bets": [], "hr_bets": [], "parlays": [], "has_odds": False, "mode": "model_only"}
+
 
 def _safe_model(date_str: str) -> dict:
     """Build or retrieve model, returning empty dict on error."""

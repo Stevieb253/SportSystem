@@ -22,8 +22,11 @@ function sortTable(tableId, colIndex) {
   _sortState[key] = asc;
 
   rows.sort((a, b) => {
-    const aText = a.cells[colIndex]?.textContent.trim() ?? '';
-    const bText = b.cells[colIndex]?.textContent.trim() ?? '';
+    const cellA = a.cells[colIndex];
+    const cellB = b.cells[colIndex];
+    // Prefer data-sort-val (stacked stat cells) over raw textContent
+    const aText = (cellA?.dataset.sortVal ?? cellA?.textContent ?? '').trim();
+    const bText = (cellB?.dataset.sortVal ?? cellB?.textContent ?? '').trim();
     const aNum  = parseFloat(aText.replace(/[^0-9.\-]/g, ''));
     const bNum  = parseFloat(bText.replace(/[^0-9.\-]/g, ''));
     if (!isNaN(aNum) && !isNaN(bNum)) return asc ? aNum - bNum : bNum - aNum;
