@@ -25,9 +25,19 @@
 {% endif %}
 
 {% set lineup_mode = model.get('lineup_mode', 'none') %}
+{% set any_live  = model.get('games', []) | selectattr('status', 'equalto', 'live')  | list | length > 0 %}
+{% set any_final = model.get('games', []) | selectattr('status', 'equalto', 'final') | list | length > 0 %}
+{% set games_in_progress = any_live or any_final %}
+
 {% if lineup_mode == 'official' %}
 <div class="alert alert-success">
   Official lineups confirmed — projections are based on today's confirmed batting orders.
+</div>
+{% elif lineup_mode in ('probable', 'mixed') and games_in_progress %}
+{# Games are live/final — "probable" label is no longer meaningful, the lineup IS set #}
+<div class="alert alert-success">
+  Games are underway — lineups are set. Projections shown are based on today's batting orders.
+  {% if lineup_mode == 'mixed' %} Some pregame lineups still probable for upcoming games.{% endif %}
 </div>
 {% elif lineup_mode == 'probable' %}
 <div class="alert alert-warn">
@@ -49,6 +59,7 @@
   <button class="tab-btn active" onclick="showTab('games', this)">Games ({{ model.get('games', [])|length }})</button>
   <button class="tab-btn" onclick="showTab('hits', this)">Hit Probability ({{ model.get('hit_probabilities', [])|length }})</button>
   <button class="tab-btn" onclick="showTab('hrs', this)">Home Runs ({{ model.get('hr_probabilities', [])|length }})</button>
+  <button class="tab-btn tab-btn-bets" onclick="showTab('bets', this)">⭐ Best Bets ({{ (best_bets.hit_bets|length) + (best_bets.hr_bets|length) }})</button>
 </div>
 
 <!-- ════════════════════════════════════════════════
@@ -195,17 +206,19 @@
         <tr>
           <th onclick="sortTable('hit-table', 0)">Player</th>
           <th onclick="sortTable('hit-table', 1)">Matchup</th>
-          <th onclick="sortTable('hit-table', 2)">AVG</th>
-          <th onclick="sortTable('hit-table', 3)">xBA</th>
-          <th onclick="sortTable('hit-table', 4)">xwOBA</th>
-          <th onclick="sortTable('hit-table', 5)">Hard Hit%</th>
-          <th onclick="sortTable('hit-table', 6)">Sweet Spot%</th>
-          <th onclick="sortTable('hit-table', 7)">Barrel%</th>
-          <th onclick="sortTable('hit-table', 8)">Whiff%</th>
-          <th onclick="sortTable('hit-table', 9)">Exit Velo</th>
-          <th onclick="sortTable('hit-table', 10)">Hit Prob</th>
-          <th onclick="sortTable('hit-table', 11)">Verdict</th>
+          <th onclick="sortTable('hit-table', 2)" title="Sorts by xBA">
+            Batting<span class="th-sub">AVG · xBA · xwOBA</span>
+          </th>
+          <th onclick="sortTable('hit-table', 3)" title="Sorts by Hard Hit%">
+            Contact<span class="th-sub">Hard Hit% · Whiff%</span>
+          </th>
+          <th onclick="sortTable('hit-table', 4)" title="Sorts by Barrel%">
+            Power<span class="th-sub">Sweet Spot% · Barrel% · EV</span>
+          </th>
+          <th onclick="sortTable('hit-table', 5)">Hit Prob</th>
+          <th onclick="sortTable('hit-table', 6)">Verdict</th>
           <th>Lineup</th>
+          <th style="width:80px">Notes</th>
         </tr>
       </thead>
       <tbody>
@@ -238,16 +251,53 @@
               <span class="gc-pitcher-sub">vs {{ vpdict.get('name', '') }}</span>
             </div>
           </td>
-          <td class="mono">{{ "%.3f"|format(pdict.get('avg', 0)) }}</td>
-          <td class="mono {% if pdict.get('xba', 0) >= 0.28 %}stat-hi{% endif %}">{{ "%.3f"|format(pdict.get('xba', 0)) }}</td>
-          <td class="mono">{{ "%.3f"|format(pdict.get('xwoba', 0)) }}</td>
-          <td class="mono">{{ "%.1f"|format(pdict.get('hard_hit_pct', 0) * 100) }}%</td>
-          <td class="mono">{{ "%.1f"|format(pdict.get('sweet_spot_pct', 0) * 100) }}%</td>
-          <td class="mono">{{ "%.1f"|format(pdict.get('barrel_pct', 0) * 100) }}%</td>
-          <td class="mono {% if pdict.get('whiff_pct', 1) <= 0.18 %}stat-blue{% endif %}">
-            {{ "%.1f"|format(pdict.get('whiff_pct', 0) * 100) }}%
+          {# ── Batting: AVG / xBA / xwOBA ── #}
+          <td data-sort-val="{{ pdict.get('xba', 0) }}">
+            <div class="stat-stack">
+              <div class="ss-row">
+                <span class="ss-lbl">AVG</span>
+                <span class="ss-val">{{ "%.3f"|format(pdict.get('avg', 0)) }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-lbl">xBA</span>
+                <span class="ss-val {% if pdict.get('xba', 0) >= 0.28 %}hi{% endif %}">{{ "%.3f"|format(pdict.get('xba', 0)) }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-lbl">xwOBA</span>
+                <span class="ss-val">{{ "%.3f"|format(pdict.get('xwoba', 0)) }}</span>
+              </div>
+            </div>
           </td>
-          <td class="mono">{{ "%.1f"|format(pdict.get('avg_exit_velo', 0)) }}</td>
+          {# ── Contact: Hard Hit% / Whiff% ── #}
+          <td data-sort-val="{{ pdict.get('hard_hit_pct', 0) }}">
+            <div class="stat-stack">
+              <div class="ss-row">
+                <span class="ss-lbl">HH%</span>
+                <span class="ss-val">{{ "%.1f"|format(pdict.get('hard_hit_pct', 0) * 100) }}%</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-lbl">Whiff%</span>
+                <span class="ss-val {% if pdict.get('whiff_pct', 1) <= 0.18 %}lo{% endif %}">{{ "%.1f"|format(pdict.get('whiff_pct', 0) * 100) }}%</span>
+              </div>
+            </div>
+          </td>
+          {# ── Power: Sweet Spot% / Barrel% / EV ── #}
+          <td data-sort-val="{{ pdict.get('barrel_pct', 0) }}">
+            <div class="stat-stack">
+              <div class="ss-row">
+                <span class="ss-lbl">SS%</span>
+                <span class="ss-val">{{ "%.1f"|format(pdict.get('sweet_spot_pct', 0) * 100) }}%</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-lbl">Brrl%</span>
+                <span class="ss-val {% if pdict.get('barrel_pct', 0) >= 0.10 %}pow{% endif %}">{{ "%.1f"|format(pdict.get('barrel_pct', 0) * 100) }}%</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-lbl">EV</span>
+                <span class="ss-val">{{ "%.1f"|format(pdict.get('avg_exit_velo', 0)) }}</span>
+              </div>
+            </div>
+          </td>
           <td>
             <div class="prob-bar-wrap">
               <div class="prob-bar" style="width: {{ (prob * 100)|round|int }}%"></div>
@@ -263,6 +313,25 @@
             <span class="lineup-badge lineup-probable" title="Based on recent game batting order">~ Probable</span>
             {% else %}
             <span class="lineup-badge lineup-roster" title="Based on active roster">~ Roster</span>
+            {% endif %}
+          </td>
+          {# Notes — floating popover inside the cell (zero table reflow) #}
+          {% set hit_notes = r.get('matchup_notes', []) %}
+          <td class="notes-td">
+            {% if hit_notes %}
+            <button class="notes-btn"
+                    data-notes-target="hit-note-{{ loop.index }}"
+                    data-batter-id="{{ pdict.get('player_id', 0) }}"
+                    data-pitcher-id="{{ vpdict.get('player_id', 0) }}"
+                    title="View matchup analysis">ℹ Analysis</button>
+            <div class="notes-popover" id="hit-note-{{ loop.index }}">
+              <span class="notes-panel-label">{{ pdict.get('name','') }} vs {{ vpdict.get('name','') }}</span>
+              <div class="notes-list" id="hit-note-{{ loop.index }}-list">
+                {% for note in hit_notes %}
+                <div class="note-item">{{ note }}</div>
+                {% endfor %}
+              </div>
+            </div>
             {% endif %}
           </td>
         </tr>
@@ -352,6 +421,27 @@
         vs {{ vpdict.get('name', '') }}
       </div>
 
+      {# Notes toggle for HR cards — smooth max-height slide, no reflow #}
+      {% set hr_notes = r.get('matchup_notes', []) %}
+      {% if hr_notes %}
+      <div class="hr-notes-wrap">
+        <button class="notes-btn hr-notes-btn"
+                data-notes-target="hr-note-{{ loop.index }}"
+                data-batter-id="{{ pdict.get('player_id', 0) }}"
+                data-pitcher-id="{{ vpdict.get('player_id', 0) }}"
+                title="View matchup analysis">ℹ Matchup Analysis</button>
+        <div class="hr-notes-panel" id="hr-note-{{ loop.index }}">
+          <div class="notes-panel">
+            <div class="notes-list" id="hr-note-{{ loop.index }}-list">
+              {% for note in hr_notes %}
+              <div class="note-item">{{ note }}</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
       <div class="hr-stat-grid">
         <div class="hr-stat">
           <span class="hr-stat-label">Barrel%</span>
@@ -412,10 +502,284 @@
   {% endif %}
 </div>
 
+<!-- ════════════════════════════════════════════════
+     TAB 4 — BEST BETS
+════════════════════════════════════════════════ -->
+{% set bb = best_bets or {} %}
+<div id="tab-bets" class="tab-content">
+
+  {# ── Mode banner ── #}
+  {% if not bb.get('hit_bets') and not bb.get('hr_bets') %}
+  <div class="bets-empty-state">
+    <div class="es-icon">⭐</div>
+    <p class="es-title">No qualifying bets today</p>
+    <p class="es-sub">No players met the confidence thresholds yet. Check back after lineups are confirmed.</p>
+  </div>
+  {% else %}
+
+  {# Mode banner: model-only vs odds-enhanced #}
+  {% if bb.get('mode') == 'odds_enhanced' %}
+  <div class="bets-mode-banner bets-mode-odds">
+    <span class="bets-mode-icon">📊</span>
+    <div>
+      <strong>Odds-Enhanced Mode</strong>
+      <span>Edge calculations active — model probability vs. book implied probability. Odds cached for up to 8 hours.</span>
+    </div>
+    <button class="btn-refresh-odds" id="btn-refresh-odds">↻ Refresh Odds</button>
+  </div>
+  {% else %}
+  <div class="bets-mode-banner bets-mode-model">
+    <span class="bets-mode-icon">🤖</span>
+    <div>
+      <strong>Model-Only Mode</strong>
+      {% if odds_key_configured %}
+      <span>Showing top picks by model confidence. Click <strong>↻ Refresh Odds</strong> to load live lines and unlock edge calculations.</span>
+      {% else %}
+      <span>Showing top picks by model confidence. Add an <code>ODDS_API_KEY</code> to your <code>.env</code> file for edge calculations.</span>
+      {% endif %}
+    </div>
+    {% if odds_key_configured %}
+    <button class="btn-refresh-odds" id="btn-refresh-odds">↻ Refresh Odds</button>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ── Top Hit Bets ── #}
+  {% if bb.get('hit_bets') %}
+  <div class="bets-section">
+    <h2 class="bets-section-title">🎯 Top Hit Bets</h2>
+    <div class="bet-cards-grid">
+      {% for bet in bb.hit_bets %}
+      <div class="bet-card {% if bet.value_label == 'AVOID' %}bet-card-avoid{% elif bet.value_label == 'VALUE' %}bet-card-value{% endif %}">
+        <div class="bet-card-top">
+          <div class="bet-player-info">
+            <img
+              src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E"
+              class="bet-headshot" alt="{{ bet.player_name }}"
+              data-real="{{ bet.player_id | mlb_photo }}" />
+            <div>
+              <span class="bet-player-name">{{ bet.player_name }}</span>
+              <span class="bet-team">{{ bet.team }} · #{{ bet.lineup_slot }}</span>
+            </div>
+          </div>
+          <span class="confidence-badge conf-{{ bet.confidence | lower }}">{{ bet.confidence }}</span>
+        </div>
+
+        <div class="bet-matchup">{{ bet.game_matchup }} · vs {{ bet.vs_pitcher }}</div>
+
+        <div class="bet-prob-row">
+          <div class="bet-prob-block">
+            <span class="bet-prob-val">{{ "%.1f"|format(bet.probability * 100) }}%</span>
+            <span class="bet-prob-lbl">HIT PROB</span>
+          </div>
+          <div class="bet-stats">
+            <span class="bet-stat">{{ bet.stat1_label }} <strong>{{ bet.stat1_value }}</strong></span>
+            <span class="bet-stat">{{ bet.stat2_label }} <strong>{{ bet.stat2_value }}</strong></span>
+          </div>
+        </div>
+
+        {% if bet.best_odds %}
+        <div class="bet-odds-row">
+          <span class="bet-odds-val">{{ bet.best_odds }}</span>
+          <span class="bet-book">{{ bet.best_book }}</span>
+          {% if bet.implied_prob %}
+          <span class="bet-implied">Implied {{ "%.1f"|format(bet.implied_prob * 100) }}%</span>
+          {% endif %}
+          {% if bet.edge is not none %}
+          <span class="bet-edge {% if bet.edge > 0 %}edge-pos{% else %}edge-neg{% endif %}">
+            {{ '+' if bet.edge > 0 }}{{ "%.1f"|format(bet.edge * 100) }}pp
+          </span>
+          {% endif %}
+          {% if bet.value_label %}
+          <span class="value-label val-{{ bet.value_label | lower }}">{{ bet.value_label }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Top HR Bets ── #}
+  {% if bb.get('hr_bets') %}
+  <div class="bets-section">
+    <h2 class="bets-section-title">💣 Top HR Bets</h2>
+    <div class="bet-cards-grid">
+      {% for bet in bb.hr_bets %}
+      <div class="bet-card {% if bet.value_label == 'AVOID' %}bet-card-avoid{% elif bet.value_label == 'VALUE' %}bet-card-value{% endif %}">
+        <div class="bet-card-top">
+          <div class="bet-player-info">
+            <img
+              src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E"
+              class="bet-headshot" alt="{{ bet.player_name }}"
+              data-real="{{ bet.player_id | mlb_photo }}" />
+            <div>
+              <span class="bet-player-name">{{ bet.player_name }}</span>
+              <span class="bet-team">{{ bet.team }} · #{{ bet.lineup_slot }}</span>
+            </div>
+          </div>
+          <span class="confidence-badge conf-{{ bet.confidence | lower }}">{{ bet.confidence }}</span>
+        </div>
+
+        <div class="bet-matchup">{{ bet.game_matchup }} · vs {{ bet.vs_pitcher }}</div>
+
+        <div class="bet-prob-row">
+          <div class="bet-prob-block">
+            <span class="bet-prob-val">{{ "%.1f"|format(bet.probability * 100) }}%</span>
+            <span class="bet-prob-lbl">HR PROB</span>
+          </div>
+          <div class="bet-stats">
+            <span class="bet-stat">{{ bet.stat1_label }} <strong>{{ bet.stat1_value }}</strong></span>
+            <span class="bet-stat">{{ bet.stat2_label }} <strong>{{ bet.stat2_value }}</strong></span>
+          </div>
+        </div>
+
+        {% if bet.best_odds %}
+        <div class="bet-odds-row">
+          <span class="bet-odds-val">{{ bet.best_odds }}</span>
+          <span class="bet-book">{{ bet.best_book }}</span>
+          {% if bet.implied_prob %}
+          <span class="bet-implied">Implied {{ "%.1f"|format(bet.implied_prob * 100) }}%</span>
+          {% endif %}
+          {% if bet.edge is not none %}
+          <span class="bet-edge {% if bet.edge > 0 %}edge-pos{% else %}edge-neg{% endif %}">
+            {{ '+' if bet.edge > 0 }}{{ "%.1f"|format(bet.edge * 100) }}pp
+          </span>
+          {% endif %}
+          {% if bet.value_label %}
+          <span class="value-label val-{{ bet.value_label | lower }}">{{ bet.value_label }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Parlays ── #}
+  {% if bb.get('parlays') %}
+  <div class="bets-section">
+    <h2 class="bets-section-title">🔗 Suggested Parlays</h2>
+    <p class="bets-section-sub">Best 2-leg combinations from top picks. No same-game legs. Each player appears once.</p>
+    <div class="parlay-grid">
+      {% for parlay in bb.parlays %}
+      <div class="parlay-card">
+        <div class="parlay-header">
+          <span class="parlay-conf conf-{{ parlay.confidence | lower }}">{{ parlay.confidence }}</span>
+          <span class="parlay-prob">{{ "%.1f"|format(parlay.combined_prob * 100) }}% combined</span>
+        </div>
+        <div class="parlay-legs">
+          {% for leg in parlay.legs %}
+          <div class="parlay-leg">
+            <div class="parlay-leg-left">
+              <span class="parlay-leg-pill {% if leg.bet_type == 'hr' %}type-hr{% else %}type-hit{% endif %}">
+                {{ 'Home Run' if leg.bet_type == 'hr' else 'Gets a Hit' }}
+              </span>
+              <div class="parlay-leg-player">
+                <span class="parlay-leg-name">{{ leg.player_name }}</span>
+                <span class="parlay-leg-team">{{ leg.team }}</span>
+              </div>
+            </div>
+            <div class="parlay-leg-right">
+              <span class="parlay-leg-prob mono">{{ "%.1f"|format(leg.probability * 100) }}%</span>
+              {% if leg.best_odds %}<span class="parlay-leg-odds">{{ leg.best_odds }}</span>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% endif %}{# end has bets #}
+</div>
+{# end tab-bets #}
+
 {% endblock %}
 
 {% block extra_js %}
 <script>
+  // ── Matchup notes — lag-free toggle + async BvP loader ───────────────────
+  // Hit-table notes: absolutely-positioned popover (zero table reflow).
+  // HR-card notes  : CSS max-height transition via .open class.
+  // BvP data       : fetched once per panel from /api/bvp/<batter>/<pitcher>
+  //                  and appended as a note item when the panel first opens.
+  (function () {
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-notes-target]');
+
+      // Clicking inside an open popover (not its button) — keep it open
+      if (!btn && e.target.closest('.notes-popover')) return;
+
+      // Close any hit-table popovers that are NOT the current target
+      document.querySelectorAll('.notes-popover.open').forEach(function (pop) {
+        if (!btn || pop.id !== btn.dataset.notesTarget) {
+          pop.classList.remove('open');
+          var relBtn = document.querySelector('[data-notes-target="' + pop.id + '"]');
+          if (relBtn) {
+            relBtn.classList.remove('notes-btn-open');
+            relBtn.textContent = 'ℹ Analysis';
+          }
+        }
+      });
+
+      if (!btn) return;
+
+      var targetId = btn.dataset.notesTarget;
+      var panel    = document.getElementById(targetId);
+      if (!panel) return;
+
+      var isHrBtn = btn.classList.contains('hr-notes-btn');
+      var isOpen  = panel.classList.contains('open');
+
+      if (isOpen) {
+        // Close it
+        panel.classList.remove('open');
+        btn.classList.remove('notes-btn-open');
+        btn.textContent = isHrBtn ? 'ℹ Matchup Analysis' : 'ℹ Analysis';
+      } else {
+        // Open it
+        panel.classList.add('open');
+        btn.classList.add('notes-btn-open');
+        btn.textContent = '✕ Close';
+
+        // ── Async BvP fetch — fires exactly once per panel ──────────────
+        if (!panel.dataset.bvpLoaded) {
+          var batterId  = btn.dataset.batterId;
+          var pitcherId = btn.dataset.pitcherId;
+          if (batterId && pitcherId && batterId !== '0' && pitcherId !== '0') {
+            panel.dataset.bvpLoaded = '1';
+            var listId = targetId + '-list';
+            var list   = document.getElementById(listId);
+            fetch('/api/bvp/' + batterId + '/' + pitcherId)
+              .then(function (r) { return r.json(); })
+              .then(function (data) {
+                if (!data.has_data || !list) return;
+                var ab = data.ab || 0;
+                if (ab < 3) return;   // too small a sample — skip silently
+                var avg = data.avg || '.000';
+                var hr  = data.hr  || 0;
+                var k   = data.k   || 0;
+                var msg = 'Career BvP: ' + ab + ' AB, ' + avg + ' avg';
+                if (hr > 0) msg += ', ' + hr + ' HR';
+                if (k  > 0) msg += ', ' + k  + ' K';
+                msg += ' (career sample).';
+                var item = document.createElement('div');
+                item.className = 'note-item';
+                item.textContent = msg;
+                list.appendChild(item);
+              })
+              .catch(function () {});  // silent failure — notes still show
+          }
+        }
+      }
+    });
+  })();
+
   // ── Player headshot lazy-upgrade ──────────────────────────────────────────
   // Script is at bottom of <body> so DOM is already built — run immediately.
   // Each img starts with an inline SVG placeholder (no network, instant).
@@ -436,11 +800,14 @@
   })();
 
   // ── Silent lineup-mode poller ──────────────────────────────────────────────
-  // Instead of hard-reloading the whole page (which causes image flicker),
-  // we silently poll the API in the background.  We only hard-reload when the
-  // lineup_mode actually upgrades (probable → official), which is a meaningful
-  // change that warrants a full re-render.  In probable mode the page is never
-  // disturbed, so player photos never flicker.
+  // Polls /api/model in the background and hard-reloads only when something
+  // meaningful changes (mode upgrades, data appears).
+  //
+  // Polling intervals:
+  //   • official lineups confirmed → no polling needed
+  //   • probable / mixed / none    → every 5 min normally
+  //   • BUT if any game is currently LIVE and mode is still probable/mixed
+  //     → drop to every 2 min so we catch lineup confirmation fast
   (function () {
     {% set lineup_mode = model.get('lineup_mode', 'none') %}
     const CURRENT_MODE = {{ lineup_mode | tojson }};
@@ -450,43 +817,57 @@
     // Only auto-poll when viewing today's date — past/future dates won't change
     if (PAGE_DATE !== TODAY) return;
 
-    {% if lineup_mode == 'none' %}
-    // No data yet — poll every 5 min. The 2-hour model TTL means get_model_for_date
-    // will auto-rebuild when it expires; we just need to check and reload.
-    const POLL_MS = 5 * 60 * 1000;
-    function checkForData() {
-      fetch('/api/model')
-        .then(r => r.json())
-        .then(data => {
-          const newMode = data.lineup_mode || 'none';
-          const hasHits = (data.hit_probabilities || []).length > 0;
-          if (newMode !== 'none' || hasHits) {
-            location.reload();
-          }
-        })
-        .catch(() => {});
-    }
-    setInterval(checkForData, POLL_MS);
+    {% if lineup_mode == 'official' %}
+    // Official lineups already confirmed — no polling needed.
 
-    {% elif lineup_mode in ('probable', 'mixed') %}
-    // Probable lineups — poll every 5 min. The 2-hour model TTL + 30-min schedule TTL
-    // means official lineups will be picked up automatically when caches expire.
-    // We only need to reload the page when mode upgrades to official.
-    const POLL_MS = 5 * 60 * 1000;
-    function checkForOfficialLineups() {
-      fetch('/api/model')
-        .then(r => r.json())
-        .then(data => {
-          const newMode = data.lineup_mode || 'none';
-          if (newMode === 'official') {
-            location.reload();  // Official lineups confirmed — reload to show them
-          }
-        })
-        .catch(() => {});
+    {% else %}
+    // probable / mixed / none — need to watch for upgrades.
+    let _pollTimer = null;
+
+    function scheduleNextPoll(ms) {
+      clearTimeout(_pollTimer);
+      _pollTimer = setTimeout(doPoll, ms);
     }
-    setInterval(checkForOfficialLineups, POLL_MS);
+
+    function doPoll() {
+      // Check scores first to see if any game has gone live
+      fetch('/api/scores/' + PAGE_DATE)
+        .then(r => r.json())
+        .then(scores => {
+          const anyLive = scores.some(g => g.status === 'live');
+
+          // Now check the model
+          return fetch('/api/model')
+            .then(r => r.json())
+            .then(data => {
+              const newMode = data.lineup_mode || 'none';
+              const hasHits = (data.hit_probabilities || []).length > 0;
+
+              // Reload when mode upgrades OR data appears for the first time
+              if (
+                newMode === 'official' ||
+                (CURRENT_MODE === 'none' && (newMode !== 'none' || hasHits))
+              ) {
+                location.reload();
+                return;
+              }
+
+              // If a game is live and we still show probable lineups,
+              // the model TTL is now 20-30 min (server-side) — poll every 2 min
+              // so we pick up the rebuild as soon as it happens.
+              const nextMs = (anyLive && newMode !== 'official')
+                ? 2 * 60 * 1000    // 2 min — game is live, check often
+                : 5 * 60 * 1000;   // 5 min — standard interval
+              scheduleNextPoll(nextMs);
+            });
+        })
+        .catch(() => scheduleNextPoll(5 * 60 * 1000));
+    }
+
+    // Kick off first poll after 5 minutes
+    scheduleNextPoll(5 * 60 * 1000);
     {% endif %}
-    // lineup_mode === 'official' → no polling needed
+    // end poller
   })();
 
   // ── Date picker min/max (constraint only — navigation handled by main.js) ──
@@ -600,6 +981,40 @@
           btn.disabled = false;
           console.error('Refresh error:', err);
         });
+    });
+  })();
+
+  // ── Refresh Odds button ───────────────────────────────────────────────────
+  // Manually fetches The Odds API for today's players (burns quota).
+  // Only fires when user explicitly clicks the button — NEVER on page load.
+  (function () {
+    const btns = document.querySelectorAll('.btn-refresh-odds, #btn-refresh-odds');
+    btns.forEach(btn => {
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        btn.textContent = '⏳ Fetching odds…';
+
+        fetch('/api/odds/refresh', { method: 'POST' })
+          .then(r => r.json())
+          .then(data => {
+            if (data.ok) {
+              const remaining = data.quota?.remaining;
+              btn.textContent = '✓ Odds loaded — reloading…';
+              if (remaining !== null && remaining !== undefined) {
+                console.info('Odds API quota remaining:', remaining);
+              }
+              setTimeout(() => location.reload(), 700);
+            } else {
+              btn.textContent = '✗ ' + (data.error || 'Error');
+              btn.disabled = false;
+            }
+          })
+          .catch(err => {
+            btn.textContent = '✗ Network error';
+            btn.disabled = false;
+            console.error('Odds refresh error:', err);
+          });
+      });
     });
   })();
 </script>
