@@ -57,6 +57,11 @@ class BatterMetrics:
     platoon_advantage: float = 0.50   # 0.0 to 1.0
     lineup_position: int = 5          # 1-9
 
+    # Bio / physical
+    height: str = ""   # e.g. "6' 1\""
+    weight: int = 0    # lbs
+    age: int   = 0
+
 
 @dataclass
 class PitcherMetrics:

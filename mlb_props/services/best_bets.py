@@ -13,6 +13,8 @@ import dataclasses
 import logging
 from typing import Any
 
+from services import odds_service
+
 logger = logging.getLogger(__name__)
 
 # ── Confidence tier thresholds ─────────────────────────────────────────────────
@@ -96,12 +98,6 @@ def _conf_hr(prob: float) -> str | None:
     return None
 
 
-def _value_label(edge: float) -> str:
-    if edge >= EDGE_VALUE:  return "VALUE"
-    if edge <= EDGE_AVOID:  return "AVOID"
-    return "FAIR"
-
-
 def _matchup(game: dict) -> str:
     away = game.get("away_team", {}).get("abbreviation", "AWY")
     home = game.get("home_team", {}).get("abbreviation", "HME")
@@ -146,10 +142,8 @@ def build_best_bets(
         name = pdict.get("name", "")
         pid  = int(pdict.get("player_id", 0) or 0)
 
-        # Odds enrichment
-        odds_info = odds_by_player.get(name, {})
-        implied   = odds_info.get("implied_prob") if odds_info else None
-        edge      = round(prob - implied, 4) if implied is not None else None
+        # Odds enrichment — all edge math delegated to odds_service
+        edge_data = odds_service.enrich_with_edge(prob, odds_by_player.get(name) or {})
 
         hit_bets.append(BestBet(
             player_name   = name,
@@ -161,11 +155,11 @@ def build_best_bets(
             game_matchup  = _matchup(gdict),
             vs_pitcher    = vpdict.get("name", ""),
             lineup_slot   = int(pdict.get("lineup_position", 0) or 0),
-            best_odds     = odds_info.get("best_odds")  if odds_info else None,
-            best_book     = odds_info.get("best_book")  if odds_info else None,
-            implied_prob  = implied,
-            edge          = edge,
-            value_label   = _value_label(edge) if edge is not None else None,
+            best_odds     = edge_data["sportsbook_odds"],
+            best_book     = edge_data["best_book"],
+            implied_prob  = edge_data["implied_probability"],
+            edge          = edge_data["edge"],
+            value_label   = edge_data["edge_label"],
             stat1_label   = "xBA",
             stat1_value   = f"{float(pdict.get('xba', 0)):.3f}",
             stat2_label   = "Whiff%",
@@ -192,9 +186,8 @@ def build_best_bets(
         pid  = int(pdict.get("player_id", 0) or 0)
 
         # Try "player_hr" key first for HR-specific odds, fall back to player name
-        odds_info = odds_by_player.get(name + "_hr") or odds_by_player.get(name, {})
-        implied   = odds_info.get("implied_prob") if odds_info else None
-        edge      = round(prob - implied, 4) if implied is not None else None
+        hr_odds_info = odds_by_player.get(name + "_hr") or odds_by_player.get(name) or {}
+        edge_data = odds_service.enrich_with_edge(prob, hr_odds_info)
 
         hr_bets.append(BestBet(
             player_name   = name,
@@ -206,11 +199,11 @@ def build_best_bets(
             game_matchup  = _matchup(gdict),
             vs_pitcher    = vpdict.get("name", ""),
             lineup_slot   = int(pdict.get("lineup_position", 0) or 0),
-            best_odds     = odds_info.get("best_odds")  if odds_info else None,
-            best_book     = odds_info.get("best_book")  if odds_info else None,
-            implied_prob  = implied,
-            edge          = edge,
-            value_label   = _value_label(edge) if edge is not None else None,
+            best_odds     = edge_data["sportsbook_odds"],
+            best_book     = edge_data["best_book"],
+            implied_prob  = edge_data["implied_probability"],
+            edge          = edge_data["edge"],
+            value_label   = edge_data["edge_label"],
             stat1_label   = "Barrel%",
             stat1_value   = f"{float(pdict.get('barrel_pct', 0)) * 100:.1f}%",
             stat2_label   = "EV50",

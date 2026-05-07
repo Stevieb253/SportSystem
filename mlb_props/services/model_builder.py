@@ -2,8 +2,10 @@
 # Orchestrates the complete daily model build.
 # No API calls. No Flask. Receives all dependencies via constructor.
 
+import concurrent.futures
 import logging
 import threading
+import time
 from datetime import datetime
 from types import ModuleType
 from typing import Any
@@ -46,6 +48,7 @@ class ModelBuilder:
         pipeline: DataPipeline,
         hit_service: ModuleType,
         hr_service: ModuleType,
+        prediction_logger=None,
     ) -> None:
         """Initialise ModelBuilder.
 
@@ -53,12 +56,14 @@ class ModelBuilder:
             pipeline: DataPipeline instance for all data fetching.
             hit_service: hit_probability module.
             hr_service: hr_probability module.
+            prediction_logger: Optional PredictionLogger; if None, logging is skipped.
         """
-        self.pipeline    = pipeline
-        self.hit_service = hit_service
-        self.hr_service  = hr_service
+        self.pipeline           = pipeline
+        self.hit_service        = hit_service
+        self.hr_service         = hr_service
+        self.prediction_logger  = prediction_logger
 
-    def build_daily_model(self, date_str: str) -> dict:
+    def build_daily_model(self, date_str: str, batch_timeout_seconds: int = 600) -> dict:
         """Build the full props model for a single date.
 
         Steps:
@@ -71,6 +76,9 @@ class ModelBuilder:
 
         Args:
             date_str: Date string YYYY-MM-DD.
+            batch_timeout_seconds: How long to wait for all game futures.
+                600s (default) captures virtually every slate.
+                300s is safe for scheduled reliability with --fast flag.
 
         Returns:
             Dict with date, games, hit_probabilities, hr_probabilities,
@@ -104,6 +112,7 @@ class ModelBuilder:
 
         def _build_game(game):
             """Enrich pitchers and compute all player probabilities for one game."""
+            t0 = time.time()
             game.home_pitcher = self.pipeline.load_pitcher_data(
                 game.home_pitcher.id, game.home_pitcher.name, game.home_pitcher.hand,
                 savant_data, fg_data,
@@ -112,22 +121,54 @@ class ModelBuilder:
                 game.away_pitcher.id, game.away_pitcher.name, game.away_pitcher.hand,
                 savant_data, fg_data,
             )
-            return self._process_game(game, savant_data, fg_data, park_factors_df)
+            result = self._process_game(game, savant_data, fg_data, park_factors_df)
+            logger.info(
+                "  [%s @ %s] complete in %.1fs",
+                game.away_team.abbreviation, game.home_team.abbreviation,
+                time.time() - t0,
+            )
+            return result
 
         # Process all games concurrently — each game is independent.
         # max_workers capped at number of games to avoid spawning idle threads.
-        import concurrent.futures
         max_workers = min(len(games), 10)
         if max_workers > 1:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            batch_start = time.time()
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            try:
                 futures = {executor.submit(_build_game, game): game for game in games}
-                for future in concurrent.futures.as_completed(futures):
+                # wait() with a hard cap so stalled games don't block the whole build.
+                # Default 600s: captures virtually all real-world slates.
+                # --fast mode uses 300s (scheduler-safe).
+                done, not_done = concurrent.futures.wait(futures, timeout=batch_timeout_seconds)
+                if not_done:
+                    game_labels = [
+                        f"{g.away_team.abbreviation}@{g.home_team.abbreviation}"
+                        for g in (futures[f] for f in not_done)
+                    ]
+                    logger.warning(
+                        "  %d game(s) timed out after %ds — abandoning: %s",
+                        len(not_done), batch_timeout_seconds, ", ".join(game_labels),
+                    )
+                for future in done:
                     try:
                         game_hit, game_hr = future.result()
                         hit_results.extend(game_hit)
                         hr_results.extend(game_hr)
                     except Exception as exc:
                         logger.warning("Game build failed: %s", exc)
+                logger.info(
+                    "  Game batch: %d/%d completed in %.1fs",
+                    len(done), len(futures), time.time() - batch_start,
+                )
+                if len(done) == 0 and len(futures) > 0:
+                    logger.critical(
+                        "  ALL %d game futures timed out — model will have 0 player projections. "
+                        "Check circuit breaker status and API call latency.",
+                        len(futures),
+                    )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
         else:
             for game in games:
                 game_hit, game_hr = _build_game(game)
@@ -138,6 +179,10 @@ class ModelBuilder:
         # as natural tiebreaker — players from the same game stay grouped together).
         hit_results.sort(key=lambda r: r.hit_probability, reverse=True)
         hr_results.sort(key=lambda r: r.hr_probability,  reverse=True)
+
+        # Reassign hit verdicts by percentile rank within today's full player pool.
+        # HR verdicts keep absolute thresholds until Phase 3 adds enough HR training data.
+        self.hit_service.assign_percentile_verdicts(hit_results)
 
         top_hit = [r for r in hit_results if r.hit_verdict == "YES"]
         top_hr  = [r for r in hr_results  if r.hr_verdict  == "YES"]
@@ -153,63 +198,143 @@ class ModelBuilder:
         else:
             lineup_mode = "probable"
 
+        # Build-quality metadata so callers can detect incomplete builds.
+        hit_player_count = len(hit_results)
+        hr_player_count  = len(hr_results)
+        games_count      = len(games)
+        if games_count > 0 and hit_player_count == 0:
+            build_status = "failed"
+        elif hit_player_count > 0:
+            built_pks = {r.game.game_pk for r in hit_results if r.game is not None}
+            build_status = "complete" if len(built_pks) >= games_count else "partial"
+        else:
+            build_status = "complete"  # off-day — no games, no players expected
+
         return {
-            "date":              date_str,
-            "generated_at":      datetime.utcnow().isoformat(),
-            "games":             games,
-            "hit_probabilities": hit_results,
-            "hr_probabilities":  hr_results,
-            "top_hit_plays":     top_hit,
-            "top_hr_plays":      top_hr,
-            "data_sources":      data_sources,
-            "lineups_confirmed": lineup_mode == "official",
-            "lineup_mode":       lineup_mode,   # "official"|"probable"|"mixed"|"none"
+            "date":                   date_str,
+            "generated_at":           datetime.utcnow().isoformat(),
+            "games":                  games,
+            "hit_probabilities":      hit_results,
+            "hr_probabilities":       hr_results,
+            "top_hit_plays":          top_hit,
+            "top_hr_plays":           top_hr,
+            "data_sources":           data_sources,
+            "lineups_confirmed":      lineup_mode == "official",
+            "lineup_mode":            lineup_mode,
+            # Validation fields — checked before caching and on cache reads.
+            "build_status":           build_status,
+            "games_count":            games_count,
+            "hit_player_count":       hit_player_count,
+            "hr_player_count":        hr_player_count,
+            "total_projection_count": hit_player_count + hr_player_count,
         }
 
-    def get_model_for_date(self, date_str: str) -> dict:
+    def get_model_for_date(self, date_str: str, batch_timeout_seconds: int = 600) -> dict:
         """Return cached model if fresh, otherwise build and cache.
 
         Uses a per-date lock so that if multiple requests arrive simultaneously
         for an uncached date, only the first one builds the model — the rest
         wait and then read from cache instead of each building independently.
 
-        Today's model uses a 2-hour TTL so it refreshes after official lineups
-        are posted (~3 hours before first pitch). Past and future dates keep
-        the default 12-hour TTL.
+        TTL policy:
+          - Complete builds today: 2-hour TTL (refreshes when new lineups post)
+          - Partial builds today:  30-minute TTL (retries sooner for full build)
+          - Past / future dates:   12-hour default
+
+        A model with 0 player projections when games are scheduled is treated as
+        invalid — it is never cached and never returned from cache.
 
         Args:
             date_str: Date string YYYY-MM-DD.
+            batch_timeout_seconds: Forwarded to build_daily_model.
 
         Returns:
             Full model dict.
         """
         from datetime import date as _date
         is_today = date_str == _date.today().isoformat()
-        ttl = 2.0 if is_today else None  # 2-hour TTL for today, default 12h otherwise
-
         cache_key = f"model_{date_str}"
 
-        # Fast path — already cached and still fresh
-        cached = self.pipeline.cache.get(cache_key, ttl_hours=ttl)
+        # Fast path — cached and still fresh.
+        # Apply a 30-min effective TTL to partial builds so they're replaced sooner.
+        if is_today:
+            cached = self.pipeline.cache.get(cache_key, ttl_hours=2.0)
+            if cached is not None and cached.get("build_status") == "partial":
+                if self.pipeline.cache.is_expired(cache_key, ttl_hours=0.5):
+                    cached = None  # partial build is >30 min old — refresh
+        else:
+            cached = self.pipeline.cache.get(cache_key, ttl_hours=None)
+
         if cached is not None:
-            logger.info("Returning cached model for %s", date_str)
-            return cached
+            if _is_valid_model(cached):
+                logger.info(
+                    "Returning cached model for %s (build_status=%s)",
+                    date_str, cached.get("build_status", "unknown"),
+                )
+                return cached
+            logger.warning(
+                "Cached model for %s is invalid (build_status=%s, hits=%d, games=%d) — "
+                "invalidating and rebuilding",
+                date_str,
+                cached.get("build_status", "unknown"),
+                len(cached.get("hit_probabilities", [])),
+                len(cached.get("games", [])),
+            )
+            self.pipeline.cache.invalidate(cache_key)
 
         # Slow path — acquire per-date lock so only one thread builds
         lock = _get_date_lock(date_str)
         with lock:
             # Check again after acquiring lock (another thread may have built it)
-            cached = self.pipeline.cache.get(cache_key, ttl_hours=ttl)
-            if cached is not None:
+            if is_today:
+                cached = self.pipeline.cache.get(cache_key, ttl_hours=2.0)
+                if cached is not None and cached.get("build_status") == "partial":
+                    if self.pipeline.cache.is_expired(cache_key, ttl_hours=0.5):
+                        cached = None
+            else:
+                cached = self.pipeline.cache.get(cache_key, ttl_hours=None)
+
+            if cached is not None and _is_valid_model(cached):
                 logger.info("Returning cached model for %s (built by concurrent request)", date_str)
                 return cached
+            if cached is not None:
+                self.pipeline.cache.invalidate(cache_key)
 
-            model = self.build_daily_model(date_str)
+            model = self.build_daily_model(date_str, batch_timeout_seconds=batch_timeout_seconds)
             # Always serialise to plain dicts before caching and returning.
             serialised = _serialise_model(model)
             # Attach matchup notes to each result (uses only existing data — no new API calls).
             _attach_matchup_notes(serialised)
-            self.pipeline.cache.set(cache_key, serialised)
+
+            # Only cache valid models — never store a build that produced 0 projections
+            # when games were scheduled (all-timeout scenario).
+            build_status = serialised.get("build_status", "unknown")
+            if _is_valid_model(serialised):
+                self.pipeline.cache.set(cache_key, serialised)
+                if build_status == "partial":
+                    logger.warning(
+                        "Partial model cached for %s (%d/%d games) — "
+                        "will auto-refresh in 30 min; run again for complete build",
+                        date_str,
+                        serialised.get("hit_player_count", 0),
+                        serialised.get("games_count", 0),
+                    )
+            else:
+                logger.critical(
+                    "Model for %s has build_status=%s with %d hits from %d games — "
+                    "NOT caching to prevent serving stale empty data on next request",
+                    date_str,
+                    build_status,
+                    len(serialised.get("hit_probabilities", [])),
+                    len(serialised.get("games", [])),
+                )
+
+            # Log predictions for ML training — failure must never affect app output.
+            if self.prediction_logger is not None:
+                try:
+                    self.prediction_logger.log_from_model(serialised, date_str)
+                except Exception as _log_exc:
+                    logger.warning("Prediction logging failed (non-fatal): %s", _log_exc)
             return serialised
 
     def invalidate_date(self, date_str: str) -> None:
@@ -249,6 +374,7 @@ class ModelBuilder:
         from api import mlb_api
 
         # ── Resolve lineups (three-tier) ──────────────────────────────────────
+        t_lineup = time.time()
         lineup_data = mlb_api.get_schedule(game.date)
         home_official, away_official = _extract_official_lineups(game.game_pk, lineup_data)
 
@@ -267,9 +393,10 @@ class ModelBuilder:
             savant_data=savant_data,
         )
 
-        logger.debug(
-            "%s @ %s — home lineup: %s (%d), away lineup: %s (%d)",
+        logger.info(
+            "  [%s @ %s] lineups resolved in %.1fs — home: %s (%d), away: %s (%d)",
             game.away_team.abbreviation, game.home_team.abbreviation,
+            time.time() - t_lineup,
             home_status, len(home_lineup),
             away_status, len(away_lineup),
         )
@@ -285,7 +412,13 @@ class ModelBuilder:
         bat_sides: dict[int, str] = {}
         if all_player_ids:
             try:
+                t_bat = time.time()
                 bat_sides = mlb_api.get_players_bat_sides(all_player_ids)
+                logger.debug(
+                    "  [%s @ %s] bat-side batch (%d players) in %.1fs",
+                    game.away_team.abbreviation, game.home_team.abbreviation,
+                    len(all_player_ids), time.time() - t_bat,
+                )
             except Exception as exc:
                 logger.warning("Batch bat-side lookup failed: %s", exc)
 
@@ -421,6 +554,7 @@ def _resolve_lineup(
     """
     # Tier 1 — official lineup already confirmed
     if official:
+        logger.info("%s: CONFIRMED lineup (%d players)", team_abbr, len(official))
         return official, LINEUP_OFFICIAL
 
     from api import mlb_api
@@ -428,18 +562,24 @@ def _resolve_lineup(
 
     season = int(game_date[:4])
 
-    # Tier 2 — yesterday's batting order from the most recent boxscore
+    # Tier 2 — most recent completed game's batting order from boxscore
     try:
+        t2_start = time.time()
         bs_lineup, src_date = mlb_api.get_recent_boxscore_lineup(team_id, game_date)
+        t2_elapsed = time.time() - t2_start
         if bs_lineup:
-            # Attach team abbr so the normalizer can use it
             for p in bs_lineup:
                 p.setdefault("team", team_abbr)
             logger.info(
-                "%s: using recent boxscore lineup from %s (%d players)",
-                team_abbr, src_date, len(bs_lineup),
+                "%s: using recent boxscore lineup from %s (%d players) [%.1fs]",
+                team_abbr, src_date, len(bs_lineup), t2_elapsed,
             )
             return [(i + 1, p) for i, p in enumerate(bs_lineup[:9])], LINEUP_PROBABLE_RECENT
+        else:
+            logger.info(
+                "%s: live lineup unavailable after %.1fs — falling back to roster",
+                team_abbr, t2_elapsed,
+            )
     except Exception as exc:
         logger.warning("Boxscore lineup fallback failed (%s): %s", team_abbr, exc)
 
@@ -514,6 +654,26 @@ def _attach_matchup_notes(serialised: dict) -> None:
         except Exception as exc:
             logger.debug("HR note generation failed for %s: %s", r.get("player", {}).get("name"), exc)
             r["matchup_notes"] = []
+
+
+def _is_valid_model(model: dict) -> bool:
+    """Return False if the model has scheduled games but zero player projections.
+
+    A valid model is either:
+      - An off-day model (no games, no players — both zero is fine)
+      - A build that produced at least some player projections
+    An invalid model is one where games are scheduled but every game future
+    timed out, leaving hit_probabilities empty.  We never cache or serve these.
+    """
+    if not isinstance(model, dict):
+        return False
+    if model.get("build_status") == "failed":
+        return False
+    games_count = len(model.get("games", []))
+    hit_count   = len(model.get("hit_probabilities", []))
+    if games_count > 0 and hit_count == 0:
+        return False
+    return True
 
 
 def _serialise_model(model: dict) -> dict:

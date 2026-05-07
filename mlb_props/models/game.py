@@ -56,6 +56,11 @@ class ProbablePitcher:
     xwoba_allowed: float = 0.0
     whiff_pct_generated: float = 0.0
 
+    # Bio / physical
+    height: str = ""   # e.g. "6' 3\""
+    weight: int = 0    # lbs
+    age: int   = 0
+
 
 @dataclass
 class Game:

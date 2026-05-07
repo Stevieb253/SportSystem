@@ -13,8 +13,14 @@ from models.weather import Weather
 
 logger = logging.getLogger(__name__)
 
-# Expected plate appearances per game used in Poisson conversion
-_PA_PER_GAME = 4.2
+# Effective plate appearances per game (excludes walks, HBP)
+_EFFECTIVE_PA = 3.7
+
+# Composite score → per-PA hit rate mapping.
+# The weighted_sum (0–1) is a talent/matchup score, NOT a batting average.
+# Map it to the realistic MLB range: ~.200 (weakest matchup) → ~.355 (elite).
+_HIT_RATE_FLOOR   = 0.200
+_HIT_RATE_CEILING = 0.355
 
 
 def normalize_value(value: float, stat_name: str) -> float:
@@ -121,21 +127,41 @@ def calculate_hit_probability(
         for key in components
     )
 
-    # Temperature multiplier
+    # Temperature multiplier applied to the hit rate, not the raw score
     temp_mult = _temperature_hit_multiplier(weather)
-    weighted_sum *= temp_mult
 
-    # Poisson: P(at least one hit in ~4.2 PA)
-    expected_hits = weighted_sum * _PA_PER_GAME
+    # ── Calibrated Poisson conversion ──────────────────────────────────────────
+    # weighted_sum is a 0–1 composite talent score, NOT a batting average.
+    # Map it to a realistic per-PA hit rate so Poisson gives sensible output.
+    #
+    # Mapping: 0.0 → .200 (terrible matchup), 1.0 → .355 (elite)
+    # Typical MLB starter scores 0.40–0.65, mapping to .269–.312 avg range.
+    #
+    # Poisson P(≥1 hit) examples:
+    #   .240 avg × 3.7 PA = 0.888 exp hits → 59%
+    #   .270 avg × 3.7 PA = 0.999 exp hits → 63%
+    #   .305 avg × 3.7 PA = 1.129 exp hits → 68%
+    #   .340 avg × 3.7 PA = 1.258 exp hits → 72%
+    # ──────────────────────────────────────────────────────────────────────────
+    per_pa_rate = _HIT_RATE_FLOOR + weighted_sum * (_HIT_RATE_CEILING - _HIT_RATE_FLOOR)
+    per_pa_rate = max(_HIT_RATE_FLOOR, min(_HIT_RATE_CEILING, per_pa_rate * temp_mult))
+
+    expected_hits = per_pa_rate * _EFFECTIVE_PA
     prob = 1.0 - math.exp(-expected_hits)
 
-    prob = max(0.25, min(0.85, prob))
+    # Realistic game-level bounds: even the weakest matchup gives ~42%,
+    # the very best tops out around 78%.
+    prob = max(0.42, min(0.78, prob))
 
     return round(prob, 4), components
 
 
 def get_verdict(probability: float) -> str:
-    """Convert probability to YES / LEAN / NO verdict.
+    """Convert probability to YES / LEAN / NO using absolute fallback thresholds.
+
+    This is the per-player fallback used during game processing before the full
+    day's distribution is known.  assign_percentile_verdicts() overrides these
+    once all players have been scored.
 
     Args:
         probability: Hit probability float.
@@ -149,6 +175,51 @@ def get_verdict(probability: float) -> str:
     if probability >= lean_cutoff:
         return "LEAN"
     return "NO"
+
+
+def assign_percentile_verdicts(results: list) -> None:
+    """Reassign hit_verdict in-place using percentile rank within today's pool.
+
+    Called once after all players for the day have been scored and sorted
+    descending by hit_probability.  Overrides the per-player fallback verdicts
+    set by get_verdict() during game processing.
+
+    Splits (configurable via config):
+        Top 15%   → YES   best contact profiles on today's slate
+        Next 45%  → LEAN  above-average matchups worth tracking
+        Bottom 40% → NO   below-average matchups
+
+    Falls back to get_verdict() per-player if results is empty or an error
+    occurs, leaving the existing verdicts intact.
+
+    Args:
+        results: List of HitProbabilityResult objects, sorted descending by
+                 hit_probability (build_daily_model sorts before calling this).
+    """
+    if not results:
+        return
+
+    try:
+        n        = len(results)
+        yes_n    = max(1, round(n * config.HIT_PERCENTILE_YES))
+        lean_end = max(yes_n + 1, round(n * (config.HIT_PERCENTILE_YES + config.HIT_PERCENTILE_LEAN)))
+
+        for i, result in enumerate(results):
+            if i < yes_n:
+                result.hit_verdict = "YES"
+            elif i < lean_end:
+                result.hit_verdict = "LEAN"
+            else:
+                result.hit_verdict = "NO"
+
+        logger.debug(
+            "Percentile verdicts assigned: %d YES, %d LEAN, %d NO (n=%d)",
+            yes_n, lean_end - yes_n, n - lean_end, n,
+        )
+    except Exception as exc:
+        logger.warning(
+            "assign_percentile_verdicts failed — keeping fallback verdicts: %s", exc
+        )
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 # Module-level cache reference injected by pipeline at startup
 _cache = None
 
+# Circuit breaker: once statcast_search returns HTML (broken endpoint) we skip
+# ALL subsequent per-player calls in this session.  They would all return garbage
+# anyway, and 270 × 2-5s HTTP calls is what causes the 150s batch timeout.
+# Flag can only go False → True; reading a bool is atomic in Python, no lock needed.
+_statcast_search_broken = False
+
 
 def set_cache(cache: Any) -> None:
     """Inject cache instance used by all functions in this module."""
@@ -27,6 +33,7 @@ def set_cache(cache: Any) -> None:
 
 def _get(url: str, params: dict) -> list[dict]:
     """Shared GET helper — returns parsed JSON list or empty list on failure."""
+    global _statcast_search_broken
     try:
         resp = requests.get(
             url,
@@ -40,6 +47,22 @@ def _get(url: str, params: dict) -> list[dict]:
         text = resp.text.strip()
         if not text:
             logger.warning("Baseball Savant returned empty body (%s %s)", url, params)
+            return []
+
+        # Detect HTML response — endpoint is returning the page, not data.
+        # statcast_search returning HTML is a known breakage mode; trip the circuit
+        # breaker so all per-player calls in this session short-circuit immediately.
+        if text.startswith("<"):
+            if "statcast_search" in url:
+                if not _statcast_search_broken:
+                    logger.warning(
+                        "Baseball Savant statcast_search returned HTML — "
+                        "circuit breaker tripped; per-player recent-form calls "
+                        "will be skipped for the rest of this session"
+                    )
+                _statcast_search_broken = True
+            else:
+                logger.warning("Baseball Savant returned HTML (%s)", url)
             return []
 
         # Some responses are CSV — detect and convert
@@ -273,6 +296,12 @@ def get_recent_statcast(player_id: int, days: int, player_type: str) -> list[dic
     Returns:
         List of pitch/batted-ball records.
     """
+    # Fast-path: if the statcast_search endpoint is broken (returned HTML for any
+    # previous caller this session), skip the HTTP call entirely.  All calls
+    # would return empty anyway, and each takes 2-5s — burning the batch timeout.
+    if _statcast_search_broken:
+        return []
+
     # 6-hour TTL: recent form data doesn't change mid-day, and we only need
     # one network call per player per session (threads share the cache).
     cache_key = f"savant_recent_{player_id}_{days}days"

@@ -2,6 +2,7 @@
 # Official MLB Stats API — free, no key required.
 
 import logging
+import time
 from typing import Any
 
 import requests
@@ -24,7 +25,8 @@ def set_cache(cache: Any) -> None:
 def _get(url: str, params: dict | None = None) -> dict:
     """GET helper — returns parsed JSON dict or empty dict on failure."""
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        # (connect_timeout, read_timeout) — prevents slow servers from hanging indefinitely
+        resp = requests.get(url, params=params, timeout=(5, 10))
         resp.raise_for_status()
         return resp.json()
     except Exception as exc:
@@ -326,7 +328,7 @@ def get_team_roster(team_id: int, season: int) -> list[dict]:
 def get_recent_boxscore_lineup(team_id: int, before_date: str) -> tuple[list[dict], str]:
     """Find the most recent completed game for a team and return its batting order.
 
-    Searches back up to 7 days from before_date. Returns (lineup, source_date).
+    Searches back up to 3 days from before_date. Returns (lineup, source_date).
     Lineup is a list of player dicts ordered by batting position.
 
     Args:
@@ -346,7 +348,8 @@ def get_recent_boxscore_lineup(team_id: int, before_date: str) -> tuple[list[dic
 
     try:
         base = dt.strptime(before_date, "%Y-%m-%d")
-        for days_back in range(1, 8):
+        # 3-day lookback (was 7) — max 6 HTTP calls per team instead of 14
+        for days_back in range(1, 4):
             check_date = (base - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
             # Get schedule for that date filtered to this team
@@ -357,7 +360,12 @@ def get_recent_boxscore_lineup(team_id: int, before_date: str) -> tuple[list[dic
                 "sportId": 1,
                 "gameType": "R",
             }
+            t_sched = time.time()
             sched = _get(url, params)
+            logger.debug(
+                "get_recent_boxscore_lineup team=%d day=-%d schedule=%.1fs",
+                team_id, days_back, time.time() - t_sched,
+            )
 
             game_pk   = None
             team_side = None
@@ -379,7 +387,12 @@ def get_recent_boxscore_lineup(team_id: int, before_date: str) -> tuple[list[dic
 
             # Fetch boxscore and extract batting order
             bs_url  = f"{config.MLB_API_BASE_URL}/game/{game_pk}/boxscore"
+            t_bs = time.time()
             boxscore = _get(bs_url)
+            logger.debug(
+                "get_recent_boxscore_lineup team=%d game=%d boxscore=%.1fs",
+                team_id, game_pk, time.time() - t_bs,
+            )
             if not boxscore:
                 continue
 

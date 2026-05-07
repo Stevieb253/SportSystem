@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import config
 from data.cache import Cache
+from data.logger import PredictionLogger
 from data.pipeline import DataPipeline
 from services import hit_probability, hr_probability
 from services.model_builder import ModelBuilder
@@ -33,9 +34,10 @@ logger = logging.getLogger("main")
 
 def _build_pipeline() -> tuple[DataPipeline, ModelBuilder]:
     """Initialise pipeline and model builder."""
-    cache    = Cache(config.CACHE_DIR, config.CACHE_TTL_HOURS)
-    pipeline = DataPipeline(cache)
-    builder  = ModelBuilder(pipeline, hit_probability, hr_probability)
+    cache              = Cache(config.CACHE_DIR, config.CACHE_TTL_HOURS)
+    pipeline           = DataPipeline(cache)
+    prediction_logger  = PredictionLogger(config.PREDICTIONS_DB_PATH)
+    builder            = ModelBuilder(pipeline, hit_probability, hr_probability, prediction_logger)
     return pipeline, builder
 
 
@@ -57,10 +59,25 @@ def run_web(date_str: str, port: int) -> None:
     _, builder = _build_pipeline()
     logger.info("Pre-building model for %s…", date_str)
     try:
-        model = builder.get_model_for_date(date_str)
-        games = model.get("games", [])
-        hits  = model.get("hit_probabilities", [])
-        logger.info("Model ready: %d games, %d player projections", len(games), len(hits))
+        model  = builder.get_model_for_date(date_str)
+        games  = model.get("games", [])
+        hits   = model.get("hit_probabilities", [])
+        status = model.get("build_status", "unknown")
+        if hits:
+            logger.info(
+                "Model ready: %d games, %d player projections (build_status=%s)",
+                len(games), len(hits), status,
+            )
+        elif games:
+            logger.critical(
+                "Model pre-build returned 0 projections for %d scheduled games "
+                "(build_status=%s). "
+                "The web app will show an empty slate. "
+                "To force a fresh build, delete: .cache/model_%s.json",
+                len(games), status, date_str,
+            )
+        else:
+            logger.info("No games scheduled for %s (off-day)", date_str)
     except Exception as exc:
         logger.warning("Model pre-build failed (will retry on request): %s", exc)
 

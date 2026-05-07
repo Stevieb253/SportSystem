@@ -81,13 +81,17 @@
     {% set ap = g.get('away_pitcher', {}) %}
     {% set weather = g.get('weather', {}) %}
 
-    <a href="/game/{{ g.get('game_pk', 0) }}" class="game-card" data-game-pk="{{ g.get('game_pk', 0) }}">
+    <a href="/game/{{ g.get('game_pk', 0) }}" class="game-card" data-game-pk="{{ g.get('game_pk', 0) }}"
+       data-game-time="{{ g.get('game_time_local', '') }}"
+       data-game-status="{{ gstatus }}">
 
       <!-- Status pill — JS updates data-status-el, data-inning-el, data-time-el -->
       <div class="gc-status-row">
         <span class="game-status status-{{ gstatus }}" data-status-el>{{ gstatus|upper }}</span>
         <span class="gc-inning" data-inning-el style="{{ 'display:none' if not is_live }}">Inn {{ g.get('inning', '') }}</span>
-        <span class="gc-time" data-time-el>{{ g.get('game_time_local', 'TBD') }}</span>
+        <span class="gc-time" data-time-el data-countdown="{{ g.get('game_time_local', '') }}">
+          {{ g.get('game_time_local', 'TBD')[:16]|replace('T', ' ') if g.get('game_time_local') else 'TBD' }}
+        </span>
       </div>
 
       <!-- Scoreboard row — score spans always in DOM; JS populates & shows them -->
@@ -119,28 +123,41 @@
         <span class="gc-venue">{{ g.get('venue', {}).get('name', '') }}</span>
         <span class="gc-weather">
           {% if weather.get('is_dome') %}
-          <span class="dome-badge">DOME</span>
+          <span class="dome-badge">🏟 DOME</span>
           {% else %}
-          {{ weather.get('condition_text', '') }} · {{ weather.get('temp_f', 72)|round|int }}°F · {{ weather.get('wind_speed_mph', 0)|round|int }} mph
-          {% if weather.get('precipitation_mm', 0) > 0 %} · {{ "%.1f"|format(weather.get('precipitation_mm', 0)) }}mm{% endif %}
+          {% set cond = weather.get('condition_text', '')|lower %}
+          {% if 'rain' in cond or 'shower' in cond or 'drizzle' in cond %}🌧
+          {% elif 'thunder' in cond or 'storm' in cond %}⛈
+          {% elif 'snow' in cond or 'flurr' in cond %}❄️
+          {% elif 'fog' in cond or 'mist' in cond %}🌫
+          {% elif 'overcast' in cond or 'cloudy' in cond %}☁️
+          {% elif 'partly' in cond or 'partial' in cond %}⛅
+          {% else %}☀️
+          {% endif %}
+          {{ weather.get('temp_f', 72)|round|int }}°F
+          · {{ weather.get('wind_speed_mph', 0)|round|int }} mph
+          {% if weather.get('precipitation_mm', 0) > 1 %}· 🌧 {{ "%.1f"|format(weather.get('precipitation_mm', 0)) }}mm{% endif %}
           {% endif %}
         </span>
       </div>
 
       <!-- Pitchers -->
       <div class="gc-pitchers">
+        {% for side_label, pitcher in [('HME', hp), ('AWY', ap)] %}
         <div class="gc-pitcher">
-          <span class="gc-pitcher-side">HME</span>
-          <span class="gc-pitcher-name">{{ hp.get('name', 'TBD') }}</span>
-          <span class="gc-pitcher-stat">ERA {{ hp.get('era', 0)|round(2) }}</span>
-          {% if hp.get('xera') %}<span class="gc-pitcher-stat xera">xERA {{ hp.get('xera')|round(2) }}</span>{% endif %}
+          <span class="gc-pitcher-side">{{ side_label }}</span>
+          <div class="gc-pitcher-info">
+            <span class="gc-pitcher-name">{{ pitcher.get('name', 'TBD') }}
+              <span class="gc-pitcher-hand">{{ pitcher.get('hand', 'R') }}HP</span>
+            </span>
+            {% if pitcher.get('height') %}
+            <span class="gc-pitcher-bio-sm">{{ pitcher.get('height') }}{% if pitcher.get('age') %} · {{ pitcher.get('age') }}yo{% endif %}</span>
+            {% endif %}
+          </div>
+          <span class="gc-pitcher-stat">ERA {{ pitcher.get('era', 0)|round(2) }}</span>
+          {% if pitcher.get('xera') %}<span class="gc-pitcher-stat xera">xERA {{ pitcher.get('xera')|round(2) }}</span>{% endif %}
         </div>
-        <div class="gc-pitcher">
-          <span class="gc-pitcher-side">AWY</span>
-          <span class="gc-pitcher-name">{{ ap.get('name', 'TBD') }}</span>
-          <span class="gc-pitcher-stat">ERA {{ ap.get('era', 0)|round(2) }}</span>
-          {% if ap.get('xera') %}<span class="gc-pitcher-stat xera">xERA {{ ap.get('xera')|round(2) }}</span>{% endif %}
-        </div>
+        {% endfor %}
       </div>
     </a>
     {% endfor %}
@@ -199,8 +216,27 @@
     <span class="sk-item"><span class="sk-dot sk-blue"></span> Whiff% ≤ 18% — batter makes contact at elite rate</span>
   </div>
 
+  {# ── Quick-summary bar ── #}
   {% if model.get('hit_probabilities') %}
-  <div class="table-wrap">
+  {% set all_hits = model.get('hit_probabilities', []) %}
+  {% set yes_hits  = all_hits | selectattr('hit_verdict', 'equalto', 'YES')  | list %}
+  {% set lean_hits = all_hits | selectattr('hit_verdict', 'equalto', 'LEAN') | list %}
+  {% set top_pick  = yes_hits | sort(attribute='hit_probability', reverse=True) | first | default(none) %}
+  <div class="picks-summary-bar">
+    <span class="psb-item psb-yes"><strong>{{ yes_hits | length }}</strong> YES</span>
+    <span class="psb-sep">·</span>
+    <span class="psb-item psb-lean"><strong>{{ lean_hits | length }}</strong> LEAN</span>
+    <span class="psb-sep">·</span>
+    <span class="psb-item psb-no"><strong>{{ (all_hits | length) - (yes_hits | length) - (lean_hits | length) }}</strong> NO</span>
+    {% if top_pick %}
+    <span class="psb-divider"></span>
+    <span class="psb-top">⭐ Top pick: <strong>{{ top_pick.get('player', {}).get('name', '') }}</strong> — {{ "%.0f"|format(top_pick.get('hit_probability', 0) * 100) }}% hit probability</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if model.get('hit_probabilities') %}
+  <div class="table-wrap table-wrap-sticky">
     <table id="hit-table" class="data-table">
       <thead>
         <tr>
@@ -218,7 +254,7 @@
           <th onclick="sortTable('hit-table', 5)">Hit Prob</th>
           <th onclick="sortTable('hit-table', 6)">Verdict</th>
           <th>Lineup</th>
-          <th style="width:80px">Notes</th>
+          <th style="width:120px">Notes</th>
         </tr>
       </thead>
       <tbody>
@@ -235,7 +271,8 @@
             data-verdict="{{ verdict }}"
             data-team="{{ pdict.get('team', '') }}"
             data-hand="{{ pdict.get('hand', 'R') }}"
-            data-pos="{{ pdict.get('lineup_position', 0) }}">
+            data-pos="{{ pdict.get('lineup_position', 0) }}"
+            data-prob="{{ (prob * 100)|round|int }}">
           <td>
             <div class="player-cell">
               <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E" class="player-headshot" alt="{{ pdict.get('name', '') }}" data-real="{{ pdict.get('player_id', 0) | mlb_photo }}" />
@@ -248,7 +285,16 @@
           <td>
             <div class="game-cell">
               <span class="gc-matchup mono">{{ away_abbr }} @ {{ home_abbr }}</span>
-              <span class="gc-pitcher-sub">vs {{ vpdict.get('name', '') }}</span>
+              <span class="gc-pitcher-sub">vs {{ vpdict.get('name', '') }}
+                {%- if vpdict.get('hand') %} ({{ vpdict.get('hand') }}HP){%- endif %}
+              </span>
+              {% if vpdict.get('height') or vpdict.get('age') %}
+              <span class="gc-pitcher-bio">
+                {%- if vpdict.get('height') %}{{ vpdict.get('height') }}{% endif %}
+                {%- if vpdict.get('height') and vpdict.get('age') %} · {% endif %}
+                {%- if vpdict.get('age') %}Age {{ vpdict.get('age') }}{% endif %}
+              </span>
+              {% endif %}
             </div>
           </td>
           {# ── Batting: AVG / xBA / xwOBA ── #}
@@ -315,24 +361,30 @@
             <span class="lineup-badge lineup-roster" title="Based on active roster">~ Roster</span>
             {% endif %}
           </td>
-          {# Notes — floating popover inside the cell (zero table reflow) #}
+          {# Actions — Explain button + optional matchup notes popover #}
           {% set hit_notes = r.get('matchup_notes', []) %}
           <td class="notes-td">
-            {% if hit_notes %}
-            <button class="notes-btn"
-                    data-notes-target="hit-note-{{ loop.index }}"
-                    data-batter-id="{{ pdict.get('player_id', 0) }}"
-                    data-pitcher-id="{{ vpdict.get('player_id', 0) }}"
-                    title="View matchup analysis">ℹ Analysis</button>
-            <div class="notes-popover" id="hit-note-{{ loop.index }}">
-              <span class="notes-panel-label">{{ pdict.get('name','') }} vs {{ vpdict.get('name','') }}</span>
-              <div class="notes-list" id="hit-note-{{ loop.index }}-list">
-                {% for note in hit_notes %}
-                <div class="note-item">{{ note }}</div>
-                {% endfor %}
+            <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+              <button class="btn-explain"
+                      data-player-id="{{ pdict.get('player_id', 0) }}"
+                      data-prop-type="hit"
+                      title="AI-powered prop analysis">✦ Explain</button>
+              {% if hit_notes %}
+              <button class="notes-btn"
+                      data-notes-target="hit-note-{{ loop.index }}"
+                      data-batter-id="{{ pdict.get('player_id', 0) }}"
+                      data-pitcher-id="{{ vpdict.get('player_id', 0) }}"
+                      title="View matchup analysis">ℹ Notes</button>
+              <div class="notes-popover" id="hit-note-{{ loop.index }}">
+                <span class="notes-panel-label">{{ pdict.get('name','') }} vs {{ vpdict.get('name','') }}</span>
+                <div class="notes-list" id="hit-note-{{ loop.index }}-list">
+                  {% for note in hit_notes %}
+                  <div class="note-item">{{ note }}</div>
+                  {% endfor %}
+                </div>
               </div>
+              {% endif %}
             </div>
-            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -470,9 +522,24 @@
       </div>
 
       <div class="hr-prob-row">
-        <div class="prob-circle prob-circle-red">
-          <span class="prob-circle-val">{{ "%.1f"|format(prob * 100) }}%</span>
-          <span class="prob-circle-lbl">HR PROB</span>
+        {# SVG arc ring — circumference of r=15.9 ≈ 100, so dasharray value = pct directly #}
+        {% set pct = (prob * 100)|round(1) %}
+        {% set ring_color = '#f97316' if verdict == 'YES' else '#94a3b8' %}
+        {% set ring_bg    = '#fed7aa' if verdict == 'YES' else '#e2e8f0' %}
+        <div class="prob-ring-wrap">
+          <svg class="prob-ring-svg" viewBox="0 0 36 36">
+            <circle class="prob-ring-track" cx="18" cy="18" r="15.9"
+                    fill="none" stroke="{{ ring_bg }}" stroke-width="3"/>
+            <circle class="prob-ring-fill" cx="18" cy="18" r="15.9"
+                    fill="none" stroke="{{ ring_color }}" stroke-width="3"
+                    stroke-dasharray="{{ pct }}, 100"
+                    stroke-linecap="round"
+                    transform="rotate(-90 18 18)"/>
+          </svg>
+          <div class="prob-ring-label">
+            <span class="prob-ring-val">{{ "%.1f"|format(pct) }}%</span>
+            <span class="prob-ring-sub">HR PROB</span>
+          </div>
         </div>
         <div class="hr-verdict-col">
           <span class="verdict-badge badge-{{ verdict|lower }}">{{ verdict }}</span>
@@ -491,6 +558,12 @@
           {% endif %}
           {% endif %}
         </div>
+      </div>
+      <div style="padding-top:0.6rem;border-top:1px solid var(--border);margin-top:0.5rem;">
+        <button class="btn-explain btn-explain-full"
+                data-player-id="{{ pdict.get('player_id', 0) }}"
+                data-prop-type="hr"
+                title="AI-powered prop analysis">✦ AI Explain</button>
       </div>
     </div>
     {% endfor %}
@@ -595,6 +668,10 @@
           {% endif %}
         </div>
         {% endif %}
+        <button class="btn-explain btn-explain-full"
+                data-player-id="{{ bet.player_id }}"
+                data-prop-type="hit"
+                title="AI-powered prop analysis">✦ Explain</button>
       </div>
       {% endfor %}
     </div>
@@ -652,6 +729,10 @@
           {% endif %}
         </div>
         {% endif %}
+        <button class="btn-explain btn-explain-full"
+                data-player-id="{{ bet.player_id }}"
+                data-prop-type="hr"
+                title="AI-powered prop analysis">✦ Explain</button>
       </div>
       {% endfor %}
     </div>
@@ -698,6 +779,41 @@
   {% endif %}{# end has bets #}
 </div>
 {# end tab-bets #}
+
+{# ── Explain Drawer — single reusable panel for all prop cards ── #}
+<div class="explain-overlay" id="explain-overlay"></div>
+<div class="explain-drawer" id="explain-drawer" aria-hidden="true">
+  <div class="ed-header">
+    <div class="ed-header-left">
+      <img class="ed-headshot"
+           src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E"
+           alt="" />
+      <div>
+        <div class="ed-player-name">—</div>
+        <div class="ed-player-meta">—</div>
+      </div>
+    </div>
+    <div class="ed-header-right">
+      <span class="ed-prob-pill">—</span>
+      <span class="ed-verdict-pill ed-verdict-no">—</span>
+      <button class="ed-close" id="explain-close" aria-label="Close panel">&#x2715;</button>
+    </div>
+  </div>
+  <div class="ed-tab-bar">
+    <button class="ed-tab-btn active" data-tab="summary">Summary</button>
+    <button class="ed-tab-btn" data-tab="matchup">Matchup</button>
+    <button class="ed-tab-btn" data-tab="arsenal">Pitch Arsenal</button>
+    <button class="ed-tab-btn" data-tab="weather">Weather &amp; Park</button>
+    <button class="ed-tab-btn" data-tab="odds">Odds &amp; Edge</button>
+  </div>
+  <div class="ed-body">
+    <div class="ed-pane active" data-pane="summary"></div>
+    <div class="ed-pane" data-pane="matchup"></div>
+    <div class="ed-pane" data-pane="arsenal"></div>
+    <div class="ed-pane" data-pane="weather"></div>
+    <div class="ed-pane" data-pane="odds"></div>
+  </div>
+</div>
 
 {% endblock %}
 
@@ -954,6 +1070,43 @@
     setInterval(updateScores, 2 * 60 * 1000);
   })();
 
+  // ── Countdown to first pitch ──────────────────────────────────────────────
+  (function () {
+    function updateCountdowns() {
+      document.querySelectorAll('[data-countdown]').forEach(el => {
+        const raw = el.dataset.countdown;
+        if (!raw) return;
+        // Skip if the parent card is live or final
+        const card = el.closest('[data-game-status]');
+        const status = card ? card.dataset.gameStatus : '';
+        if (status === 'live' || status === 'final') return;
+
+        const gameTime = new Date(raw);
+        const now = new Date();
+        const diffMs = gameTime - now;
+
+        if (isNaN(diffMs)) return;
+
+        if (diffMs <= 0 && diffMs > -3600000) {
+          el.textContent = 'Starting soon';
+          el.classList.add('countdown-soon');
+          return;
+        }
+        if (diffMs <= 0) return; // game likely started, score updater handles it
+
+        const totalMins = Math.floor(diffMs / 60000);
+        const hours = Math.floor(totalMins / 60);
+        const mins  = totalMins % 60;
+
+        el.textContent = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+        el.classList.toggle('countdown-soon', totalMins <= 30);
+      });
+    }
+
+    updateCountdowns();
+    setInterval(updateCountdowns, 60 * 1000);
+  })();
+
   // ── Refresh button ────────────────────────────────────────────────────────
   // Clears today's model + schedule cache server-side, rebuilds, then reloads.
   (function () {
@@ -994,7 +1147,12 @@
         btn.disabled = true;
         btn.textContent = '⏳ Fetching odds…';
 
-        fetch('/api/odds/refresh', { method: 'POST' })
+        const _oddsDate = (document.getElementById('date-nav') || {}).dataset?.date || '';
+        fetch('/api/odds/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: _oddsDate })
+        })
           .then(r => r.json())
           .then(data => {
             if (data.ok) {

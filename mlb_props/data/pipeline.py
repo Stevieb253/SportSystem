@@ -279,6 +279,20 @@ class DataPipeline:
             season=self._season,
         )
 
+        # Attach bio data (height / weight / age) — cached, costs nothing after first fetch
+        if player_id:
+            try:
+                from api import mlb_api
+                info = mlb_api.get_player_info(player_id)
+                people = info.get("people", [])
+                if people:
+                    p = people[0]
+                    metrics.height = p.get("height", "")
+                    metrics.weight = int(p.get("weight", 0) or 0)
+                    metrics.age    = int(p.get("currentAge", 0) or 0)
+            except Exception:
+                pass
+
         return metrics
 
     def load_pitcher_data(
@@ -361,7 +375,23 @@ class DataPipeline:
                 logger.warning("MLB API pitcher fallback failed (%s): %s", pitcher_id, exc)
 
         raw_pitcher = {"id": pitcher_id, "fullName": pitcher_name, "pitchHand": {"code": hand}}
-        return normalizer.normalize_probable_pitcher(raw_pitcher, savant_pitcher, fg_row)
+        pitcher = normalizer.normalize_probable_pitcher(raw_pitcher, savant_pitcher, fg_row)
+
+        # Attach bio data (height / weight / age) — cached, costs nothing after first fetch
+        if pitcher_id:
+            try:
+                from api import mlb_api
+                info = mlb_api.get_player_info(pitcher_id)
+                people = info.get("people", [])
+                if people:
+                    p = people[0]
+                    pitcher.height = p.get("height", "")
+                    pitcher.weight = int(p.get("weight", 0) or 0)
+                    pitcher.age    = int(p.get("currentAge", 0) or 0)
+            except Exception:
+                pass
+
+        return pitcher
 
     def load_historical_player(
         self,
