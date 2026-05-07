@@ -33,6 +33,22 @@ CACHE_DIR               = ".cache"
 CACHE_TTL_HOURS         = 12
 LIVE_POLL_SECONDS       = 30
 
+# ── Training database ──────────────────────────────────────────────────────────
+# SQLite file that accumulates daily predictions for ML training (Phase 0+).
+PREDICTIONS_DB_PATH     = str(Path(__file__).parent / "db" / "predictions.sqlite")
+
+# ── Google Cloud / Vertex AI (Gemini explanations) ────────────────────────────
+GOOGLE_CLOUD_PROJECT    = os.getenv("GOOGLE_CLOUD_PROJECT", "mlb-props-app")
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+# Gemini model used by the /explain endpoint.
+# With an API key (google-generativeai SDK): "gemini-1.5-flash" is the correct name.
+# Override via GEMINI_MODEL in .env to try other versions.
+GEMINI_MODEL            = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_LOCATION         = os.getenv("GEMINI_LOCATION", "us-central1")
+# Optional: set GEMINI_API_KEY in .env to use Google AI Studio API key auth (simpler).
+# If blank, the service falls back to service account credentials from GOOGLE_APPLICATION_CREDENTIALS.
+GEMINI_API_KEY          = os.getenv("GEMINI_API_KEY", "")
+
 # ── Hit Probability Formula Weights ───────────────────────────────────────────
 # Must sum to 1.0
 HIT_WEIGHTS = {
@@ -62,8 +78,17 @@ HR_WEIGHTS = {
 }
 
 # ── Verdict Thresholds ────────────────────────────────────────────────────────
-HIT_VERDICT_THRESHOLDS  = (0.48, 0.60)   # (LEAN cutoff, YES cutoff)
+HIT_VERDICT_THRESHOLDS  = (0.60, 0.66)   # fallback absolute thresholds (used when daily list unavailable)
 HR_VERDICT_THRESHOLDS   = (0.08, 0.15)   # (LEAN cutoff, YES cutoff)
+
+# ── Hit verdict percentile splits ─────────────────────────────────────────────
+# Verdicts are assigned by rank within each day's full player pool.
+# Fallback to HIT_VERDICT_THRESHOLDS if the daily list is unavailable.
+#   Top 15%  → YES   (~40 players on a 15-game slate)
+#   Next 45% → LEAN  (~120 players)
+#   Bottom 40% → NO  (~110 players)
+HIT_PERCENTILE_YES      = 0.15   # top N% of the day's hit probabilities → YES
+HIT_PERCENTILE_LEAN     = 0.45   # next N% → LEAN  (YES + LEAN = 60% total)
 
 # ── Normalization Ranges ──────────────────────────────────────────────────────
 NORMALIZATION_RANGES = {
@@ -200,7 +225,13 @@ FANGRAPHS_START_YEAR = 2002
 MIN_PA_QUALIFY       = 25
 MIN_IP_QUALIFY       = 5
 RECENT_FORM_DAYS     = 14
-BVP_MIN_AB           = 10
+BVP_MIN_AB           = 10   # below this = "tiny" sample
+BVP_SMALL_AB         = 20   # below this = "small" sample
+BVP_MODERATE_AB      = 50   # below this = "moderate"; at/above = "large"
+
+# ── Baseball Savant pitch arsenal endpoints (Phase 1b) ─────────────────────────
+SAVANT_PITCH_ARSENAL_URL  = "https://baseballsavant.mlb.com/player-services/pitch_arsenal_stats"
+SAVANT_BATTER_ARSENAL_URL = "https://baseballsavant.mlb.com/player-services/batter_pitch_arsenal_stats"
 
 # ── App ────────────────────────────────────────────────────────────────────────
 DEBUG = False

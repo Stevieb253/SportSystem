@@ -108,6 +108,13 @@
         </div>
         <span class="pdc-name">{{ pitcher.get('name','TBD') }}</span>
         <span class="pdc-hand">{{ pitcher.get('hand','R') }}HP</span>
+        {% if pitcher.get('height') or pitcher.get('age') %}
+        <span class="pdc-bio">
+          {%- if pitcher.get('height') %}{{ pitcher.get('height') }}{% endif %}
+          {%- if pitcher.get('height') and pitcher.get('weight') %} · {{ pitcher.get('weight') }} lbs{% endif %}
+          {%- if pitcher.get('age') %} · Age {{ pitcher.get('age') }}{% endif %}
+        </span>
+        {% endif %}
       </div>
       <div class="pdc-stats">
         <div class="pdc-stat"><span class="pdc-stat-label">ERA</span><span class="mono">{{ "%.2f"|format(pitcher.get('era',0)) }}</span></div>

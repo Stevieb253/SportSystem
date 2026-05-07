@@ -11,24 +11,33 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from data.cache import Cache
+from data.logger import PredictionLogger
 from data.pipeline import DataPipeline
 from services import hit_probability, hr_probability
 from services.model_builder import ModelBuilder
 from services import historical_service
 from services import best_bets as best_bets_service
+from services import odds_service
+from services import prop_context_service
+from services import gemini_service
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("main", __name__)
 
 # ── App-level singletons (created once, reused across all requests) ───────────
-_cache    = Cache(config.CACHE_DIR, config.CACHE_TTL_HOURS)
-_pipeline = DataPipeline(_cache)
-_builder  = ModelBuilder(_pipeline, hit_probability, hr_probability)
+_cache             = Cache(config.CACHE_DIR, config.CACHE_TTL_HOURS)
+_pipeline          = DataPipeline(_cache)
+_prediction_logger = PredictionLogger(config.PREDICTIONS_DB_PATH)
+_builder           = ModelBuilder(_pipeline, hit_probability, hr_probability, _prediction_logger)
 
-# Wire odds API cache injection (manual refresh only — never auto-called)
+# Wire API cache injections (after _cache is created)
 from api import odds_api as _odds_api
 _odds_api.set_cache(_cache)
+from api import bvp_api as _bvp_api
+_bvp_api.set_cache(_cache)
+from api import pitch_arsenal_api as _pitch_arsenal_api
+_pitch_arsenal_api.set_cache(_cache)
 
 # TTL for cached odds-by-player summary (mirrors odds_api.ODDS_CACHE_TTL_HOURS)
 _ODDS_SUMMARY_TTL = 8.0
@@ -326,6 +335,70 @@ def api_bvp(batter_id: int, pitcher_id: int):
         return jsonify({"has_data": False})
 
 
+@bp.route("/api/prop/<int:player_id>/<prop_type>/context")
+def api_prop_context(player_id: int, prop_type: str):
+    """Return structured context JSON for a single player prop.
+
+    Assembles batter season stats, pitcher stats, BvP history, weather,
+    park factors, and odds into one dict.  Every field is either a real
+    value or explicitly null + available=False — nothing is invented.
+
+    Path params:
+        player_id:  MLBAM batter ID.
+        prop_type:  "hit" or "hr".
+
+    Query params:
+        date: YYYY-MM-DD  (defaults to today)
+
+    Returns:
+        {player, prop, batter_season, pitcher, bvp, context, data_availability}
+    """
+    if prop_type not in ("hit", "hr"):
+        return jsonify({"error": "prop_type must be 'hit' or 'hr'"}), 400
+
+    date_str = request.args.get("date") or date.today().isoformat()
+    ctx, err_response = _build_prop_ctx(player_id, prop_type, date_str)
+    if err_response is not None:
+        return err_response
+    return jsonify(ctx)
+
+
+@bp.route("/api/prop/<int:player_id>/<prop_type>/explain")
+def api_prop_explain(player_id: int, prop_type: str):
+    """Return structured context + Gemini plain-English explanation for a player prop.
+
+    Calls /context internally, then asks Gemini to explain the data.
+    If Gemini is unavailable (missing creds, API error), still returns the full
+    context with explanation.available=False and explanation.error set.
+
+    Path params:
+        player_id:  MLBAM batter ID.
+        prop_type:  "hit" or "hr".
+
+    Query params:
+        date: YYYY-MM-DD  (defaults to today)
+
+    Returns:
+        Full context dict (same as /context) plus an "explanation" key.
+    """
+    if prop_type not in ("hit", "hr"):
+        return jsonify({"error": "prop_type must be 'hit' or 'hr'"}), 400
+
+    date_str = request.args.get("date") or date.today().isoformat()
+    ctx, err_response = _build_prop_ctx(player_id, prop_type, date_str)
+    if err_response is not None:
+        return err_response
+
+    gemini_cache_key = f"gemini_explain_{player_id}_{prop_type}_{date_str}"
+    explanation = gemini_service.explain_prop(
+        ctx,
+        cache=_cache,
+        cache_key=gemini_cache_key,
+    )
+
+    return jsonify({**ctx, "explanation": explanation})
+
+
 @bp.route("/api/live")
 def api_live():
     """Return ESPN live scoreboard."""
@@ -410,7 +483,8 @@ def api_odds_refresh():
         return jsonify({"ok": False, "error": "No ODDS_API_KEY configured in .env"}), 400
 
     try:
-        today = date.today().isoformat()
+        body = request.get_json(silent=True) or {}
+        today = body.get("date") or date.today().isoformat()
         model = _safe_model(today)
 
         # Collect all player names from today's model
@@ -430,8 +504,16 @@ def api_odds_refresh():
         # Fetch all props (respects 8h cache — won't burn quota if already fresh)
         odds_by_player = _mlb_odds.fetch_all_props_for_today(player_names)
 
+        logger.info(
+            "Odds refresh: target_date=%s, players_in_model=%d, players_with_odds=%d",
+            today, len(player_names), len(odds_by_player),
+        )
+
         # Persist the merged summary so index() can read it on next page load
         _cache.set(f"best_bets_odds_{today}", odds_by_player)
+
+        # Write odds + edge to SQLite training DB (non-fatal if it fails)
+        _persist_odds_to_db(today, model, odds_by_player)
 
         quota = _mlb_odds.get_quota_info()
         logger.info(
@@ -489,6 +571,124 @@ def api_player_stats(player_name: str):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _persist_odds_to_db(date_str: str, model: dict, odds_by_player: dict) -> None:
+    """Write sportsbook odds + edge to prediction rows in SQLite.
+
+    Called after a manual odds refresh.  Non-fatal — a failure here must never
+    affect the odds response returned to the browser.
+    """
+    try:
+        updated = 0
+        hit_matched = 0
+        hit_skipped_no_odds = 0
+        hit_skipped_no_implied = 0
+
+        for r in model.get("hit_probabilities", []):
+            if not isinstance(r, dict):
+                continue
+            name      = (r.get("player") or {}).get("name", "")
+            odds_info = odds_by_player.get(name)
+            if not odds_info:
+                hit_skipped_no_odds += 1
+                continue
+            hit_matched += 1
+            prob      = float(r.get("hit_probability", 0))
+            edge_data = odds_service.enrich_with_edge(prob, odds_info)
+            if edge_data["implied_probability"] is None:
+                hit_skipped_no_implied += 1
+                continue
+            _prediction_logger.update_odds(
+                date_str            = date_str,
+                player_name         = name,
+                prop_type           = "hit",
+                sportsbook_odds     = edge_data["sportsbook_odds"] or "",
+                sportsbook_line     = edge_data["sportsbook_line"] or 0.5,
+                implied_probability = edge_data["implied_probability"],
+                best_book           = edge_data["best_book"] or "",
+                edge                = edge_data["edge"],
+            )
+            updated += 1
+
+        logger.info(
+            "_persist_odds hit: date=%s matched=%d skipped_no_odds=%d skipped_no_implied=%d written=%d",
+            date_str, hit_matched, hit_skipped_no_odds, hit_skipped_no_implied, updated,
+        )
+
+        hr_start = updated
+        for r in model.get("hr_probabilities", []):
+            if not isinstance(r, dict):
+                continue
+            name      = (r.get("player") or {}).get("name", "")
+            odds_info = odds_by_player.get(name + "_hr") or odds_by_player.get(name)
+            if not odds_info:
+                continue
+            prob      = float(r.get("hr_probability", 0))
+            edge_data = odds_service.enrich_with_edge(prob, odds_info)
+            if edge_data["implied_probability"] is None:
+                continue
+            _prediction_logger.update_odds(
+                date_str            = date_str,
+                player_name         = name,
+                prop_type           = "hr",
+                sportsbook_odds     = edge_data["sportsbook_odds"] or "",
+                sportsbook_line     = edge_data["sportsbook_line"] or 0.5,
+                implied_probability = edge_data["implied_probability"],
+                best_book           = edge_data["best_book"] or "",
+                edge                = edge_data["edge"],
+            )
+            updated += 1
+
+        logger.info(
+            "_persist_odds hr: date=%s written=%d",
+            date_str, updated - hr_start,
+        )
+        logger.info("Persisted odds to SQLite: %d rows updated for %s", updated, date_str)
+    except Exception as exc:
+        logger.warning("_persist_odds_to_db failed (non-fatal): %s", exc)
+
+
+def _build_prop_ctx(
+    player_id: int,
+    prop_type: str,
+    date_str: str,
+) -> tuple:
+    """Build prop context dict for routes that need it.
+
+    Returns (ctx_dict, None) on success or (None, error_response) on failure.
+    Shared by /context and /explain so the setup logic is not duplicated.
+    """
+    model = _safe_model(date_str)
+    if not model.get("hit_probabilities") and not model.get("hr_probabilities"):
+        return None, (jsonify({"error": f"model unavailable for {date_str}"}), 503)
+
+    odds_by_player = _cache.get(
+        f"best_bets_odds_{date_str}", ttl_hours=_ODDS_SUMMARY_TTL
+    ) or {}
+
+    try:
+        park_factors_df = _pipeline.load_park_factors(int(date_str[:4]))
+    except Exception:
+        park_factors_df = None
+
+    ctx = prop_context_service.build_prop_context(
+        player_id         = player_id,
+        prop_type         = prop_type,
+        model             = model,
+        bvp_api           = _bvp_api,
+        odds_by_player    = odds_by_player,
+        park_factors_df   = park_factors_df,
+        pitch_arsenal_api = _pitch_arsenal_api,
+    )
+
+    if ctx is None:
+        return None, (
+            jsonify({"error": f"player {player_id} not found in {prop_type} model for {date_str}"}),
+            404,
+        )
+
+    return ctx, None
+
 
 def _build_best_bets(model: dict, date_str: str) -> dict:
     """Build best bets, reading cached odds if available (never fetching fresh)."""

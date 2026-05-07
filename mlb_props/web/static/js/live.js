@@ -1,14 +1,31 @@
-// live.js — Polls /api/live every 30 seconds and updates the Live Scores tab.
+// live.js — Polls /api/live and updates the Live Scores tab.
+// Adaptive polling: 30 s when games are in progress, 3 min otherwise.
 
 (function () {
-  const POLL_INTERVAL_MS = 30000;
+  const POLL_LIVE_MS  = 30000;   // 30 s  — games actively in progress
+  const POLL_IDLE_MS  = 180000;  // 3 min — no live games (scheduled / all final)
   let expandedGame = null;
+  let _timer = null;
+
+  function schedulePoll(delayMs) {
+    clearTimeout(_timer);
+    _timer = setTimeout(fetchLive, delayMs);
+  }
 
   function fetchLive() {
     fetch('/api/live')
       .then(r => r.json())
-      .then(data => renderScores(data))
-      .catch(() => {});
+      .then(data => {
+        renderScores(data);
+        // Check whether any game is currently in progress
+        const events = data.events || [];
+        const hasLive = events.some(e => {
+          const d = (e.status?.type?.description || '').toLowerCase();
+          return d.includes('progress') || d.includes('live');
+        });
+        schedulePoll(hasLive ? POLL_LIVE_MS : POLL_IDLE_MS);
+      })
+      .catch(() => schedulePoll(POLL_IDLE_MS));
   }
 
   function renderScores(data) {
@@ -109,7 +126,6 @@
     el.innerHTML = html;
   }
 
-  // Initial fetch + polling
+  // Initial fetch — subsequent polls are self-scheduled by fetchLive()
   fetchLive();
-  setInterval(fetchLive, POLL_INTERVAL_MS);
 })();

@@ -35,116 +35,33 @@ def _import_pybaseball():
 
 
 def get_season_batting_fangraphs(year: int, min_pa: int = 25) -> pd.DataFrame:
-    """Fetch FanGraphs season batting stats via pybaseball.
+    """FanGraphs batting stats — disabled (site returns 403 for all automated requests).
 
-    Args:
-        year: Season year.
-        min_pa: Minimum plate appearances to qualify.
-
-    Returns:
-        DataFrame with batting stats, empty DataFrame on failure.
+    The app falls back to MLB Stats API + Baseball Savant for all batter data,
+    so this layer is not needed. Keeping the function signature so call sites
+    don't need to change; it just returns an empty DataFrame immediately.
     """
-    cache_key = f"fangraphs_batting_{year}_{min_pa}"
-    if _cache:
-        cached = _cache.get(cache_key)
-        if cached is not None:
-            return pd.DataFrame(cached)
-
-    pb = _import_pybaseball()
-    if pb is None:
-        return pd.DataFrame()
-
-    try:
-        df = pb.batting_stats(year, qual=min_pa)
-        if _cache:
-            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
-        return df
-    except Exception as exc:
-        logger.warning("FanGraphs batting stats failed (year=%s): %s", year, exc)
-
-    # Fallback to Baseball Reference via pybaseball
-    # bref scraping is brittle — can fail with "list index out of range" on HTML changes.
-    try:
-        df = pb.batting_stats_bref(year)
-        if not isinstance(df, pd.DataFrame):
-            raise ValueError(f"bref returned non-DataFrame: {type(df)}")
-        if _cache:
-            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
-        return df
-    except (IndexError, KeyError, ValueError, AttributeError) as exc2:
-        # HTML structure changed or empty page — log and return empty, caller will use MLB API
-        logger.warning(
-            "Baseball Reference batting stats failed (year=%s) — falling back to MLB API: %s",
-            year, exc2,
-        )
-        if _cache:
-            _cache.set(cache_key, [])  # cache the failure so we don't retry this session
-        return pd.DataFrame()
-    except Exception as exc2:
-        logger.warning("Baseball Reference batting stats also failed (year=%s): %s", year, exc2)
-        if _cache:
-            _cache.set(cache_key, [])
-        return pd.DataFrame()
+    logger.debug("FanGraphs batting skipped (blocked) — using MLB API / Savant fallback")
+    return pd.DataFrame()
 
 
 def get_season_pitching_fangraphs(year: int, min_ip: int = 5) -> pd.DataFrame:
-    """Fetch FanGraphs season pitching stats via pybaseball.
+    """FanGraphs pitching stats — disabled (site returns 403 for all automated requests).
 
-    Args:
-        year: Season year.
-        min_ip: Minimum innings pitched to qualify.
-
-    Returns:
-        DataFrame with pitching stats, empty DataFrame on failure.
+    The app falls back to MLB Stats API + Baseball Savant for all pitcher data,
+    so this layer is not needed. Keeping the function signature so call sites
+    don't need to change; it just returns an empty DataFrame immediately.
     """
-    cache_key = f"fangraphs_pitching_{year}_{min_ip}"
-    if _cache:
-        cached = _cache.get(cache_key)
-        if cached is not None:
-            return pd.DataFrame(cached)
-
-    pb = _import_pybaseball()
-    if pb is None:
-        return pd.DataFrame()
-
-    try:
-        df = pb.pitching_stats(year, qual=min_ip)
-        if _cache:
-            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
-        return df
-    except Exception as exc:
-        logger.warning("FanGraphs pitching stats failed (year=%s): %s", year, exc)
-
-    try:
-        df = pb.pitching_stats_bref(year)
-        if not isinstance(df, pd.DataFrame):
-            raise ValueError(f"bref returned non-DataFrame: {type(df)}")
-        if _cache:
-            _cache.set(cache_key, df.to_dict(orient="records"))  # cache even if empty
-        return df
-    except (IndexError, KeyError, ValueError, AttributeError) as exc2:
-        logger.warning(
-            "Baseball Reference pitching stats failed (year=%s) — falling back to MLB API: %s",
-            year, exc2,
-        )
-        if _cache:
-            _cache.set(cache_key, [])  # cache the failure so we don't retry this session
-        return pd.DataFrame()
-    except Exception as exc2:
-        logger.warning("Baseball Reference pitching stats also failed (year=%s): %s", year, exc2)
-        if _cache:
-            _cache.set(cache_key, [])
-        return pd.DataFrame()
+    logger.debug("FanGraphs pitching skipped (blocked) — using MLB API / Savant fallback")
+    return pd.DataFrame()
 
 
 def get_park_factors(year: int) -> pd.DataFrame:
-    """Fetch park factor data via pybaseball.
+    """Park factor data via pybaseball.
 
-    Args:
-        year: Season year.
-
-    Returns:
-        DataFrame with park factors, empty DataFrame on failure.
+    pybaseball's park_factors() function requires a valid season year and
+    returns a DataFrame indexed by team. Returns empty DataFrame on failure;
+    the model falls back to a neutral factor of 100 for all parks.
     """
     cache_key = f"park_factors_{year}"
     if _cache:
@@ -156,22 +73,22 @@ def get_park_factors(year: int) -> pd.DataFrame:
     if pb is None:
         return pd.DataFrame()
 
-    # Try multiple pybaseball park factor functions (API changed across versions)
-    for fn_name in ("park_factors", "statcast_single_game"):
-        fn = getattr(pb, fn_name, None)
-        if fn is None:
-            continue
-        try:
-            df = fn(year)
-            if not df.empty and _cache:
+    fn = getattr(pb, "park_factors", None)
+    if fn is None:
+        logger.debug("pybaseball.park_factors not available — using neutral 100")
+        return pd.DataFrame()
+
+    try:
+        df = fn(year)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            if _cache:
                 _cache.set(cache_key, df.to_dict(orient="records"))
             return df
-        except Exception as exc:
-            logger.warning("Park factors via %s failed (year=%s): %s", fn_name, year, exc)
+    except Exception as exc:
+        logger.debug("Park factors unavailable (year=%s): %s — using neutral 100", year, exc)
 
-    logger.warning("Park factors unavailable — using neutral 100 for all parks")
     if _cache:
-        _cache.set(cache_key, [])  # cache the failure so we don't retry every build
+        _cache.set(cache_key, [])  # cache the miss so we don't retry this session
     return pd.DataFrame()
 
 
