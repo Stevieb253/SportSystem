@@ -390,14 +390,16 @@ function searchTable(tableId, query) {
     }
     html += '</div>';
 
-    // AI explanation
-    html += '<h3 class="ed-section-title">AI Analysis</h3>';
-    if (exp.available && exp.explanation) {
-      html += '<div class="ed-explanation">' + _esc(exp.explanation) + '</div>';
+    // AI explanation — always render a consistent card
+    const cleanText = _cleanExplanationText(exp.available ? exp.explanation : null);
+    html += '<div class="ed-ai-card">';
+    html += '<div class="ed-ai-card-header"><span class="ed-ai-icon">&#x2736;</span><span>AI Analysis</span></div>';
+    if (cleanText) {
+      html += '<p class="ed-explanation">' + _esc(cleanText) + '</p>';
     } else {
-      const msg = exp.error ? 'Unavailable: ' + exp.error : 'AI explanation not available for this prop.';
-      html += '<div class="ed-explanation-unavailable">' + _esc(msg) + '</div>';
+      html += '<p class="ed-explanation-unavailable">AI explanation is unavailable right now, but the matchup data below is still available.</p>';
     }
+    html += '</div>';
 
     // Key factors — why this prop is good
     const kf = exp.key_factors || [];
@@ -681,6 +683,40 @@ function searchTable(tableId, query) {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  // Sanitise Gemini explanation text before displaying.
+  // Handles: raw JSON strings, markdown fences, and empty/null values.
+  // Returns a clean plain-text string or null (caller shows fallback message).
+  function _cleanExplanationText(raw) {
+    if (!raw) return null;
+    var s = String(raw).trim();
+
+    // Helper to pull explanation out of a parsed JSON object
+    function _fromObj(obj) {
+      return (obj && typeof obj.explanation === 'string' && obj.explanation.trim())
+        ? obj.explanation.trim() : null;
+    }
+
+    // Strip markdown fences (``` or ```json at start, ``` at end)
+    var stripped = s.replace(/^```[a-zA-Z]*\s*/i, '').replace(/\s*```\s*$/, '').trim();
+
+    // If it looks like a JSON object after stripping, try to parse it
+    if (stripped.charAt(0) === '{') {
+      try {
+        return _fromObj(JSON.parse(stripped)) || null;
+      } catch (e) {
+        // Regex fallback — extract "explanation": "..." value
+        var m = stripped.match(/"explanation"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (m) return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').trim() || null;
+        // Still looks like JSON but we can't extract anything useful — suppress it
+        console.warn('[explain] Could not parse Gemini JSON response:', stripped.slice(0, 200));
+        return null;
+      }
+    }
+
+    // Plain text — return as-is (the server already parsed correctly)
+    return stripped || null;
+  }
+
   function _setButtonsLoading(playerId, propType, loading) {
     document.querySelectorAll(
       '.btn-explain[data-player-id="' + playerId + '"][data-prop-type="' + propType + '"]'

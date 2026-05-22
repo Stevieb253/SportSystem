@@ -20,6 +20,7 @@ from services import best_bets as best_bets_service
 from services import odds_service
 from services import prop_context_service
 from services import gemini_service
+from services import game_context_service
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ def game_detail(game_pk: int):
         hit_results=hit_results,
         hr_results=hr_results,
         selected_date=today,
+        debug=config.DEBUG,
     )
 
 
@@ -397,6 +399,65 @@ def api_prop_explain(player_id: int, prop_type: str):
     )
 
     return jsonify({**ctx, "explanation": explanation})
+
+
+@bp.route("/api/game/<int:game_pk>/explain")
+def api_game_explain(game_pk: int):
+    """Return an AI Game Breakdown (Gemini) for a single game.
+
+    Builds game context from today's model data, then asks Gemini to produce
+    a structured plain-English breakdown. Cached 2 hours per game+date.
+
+    Query params:
+        date:  YYYY-MM-DD  (defaults to today)
+        force: 1           (bypass + invalidate cache, regenerate fresh)
+
+    Returns:
+        Dict with keys: summary, pitching_edge, offensive_edge,
+        weather_park_impact, reasons_away_could_win, reasons_home_could_win,
+        data_caveats, available, model, error, used_fallback_summary.
+    """
+    date_str = request.args.get("date") or date.today().isoformat()
+    force    = request.args.get("force") == "1"
+    if force:
+        logger.info(
+            "api_game_explain: force=1 received — cache will be bypassed  "
+            "game_pk=%s  date=%s",
+            game_pk, date_str,
+        )
+    model = _safe_model(date_str)
+
+    game = next((g for g in model.get("games", []) if _game_pk(g) == game_pk), None)
+    if game is None:
+        return jsonify({"error": f"game {game_pk} not found for {date_str}"}), 404
+
+    hit_results = [r for r in model.get("hit_probabilities", []) if _result_game_pk(r) == game_pk]
+    hr_results  = [r for r in model.get("hr_probabilities",  []) if _result_game_pk(r) == game_pk]
+
+    try:
+        park_factors_df = _pipeline.load_park_factors(int(date_str[:4]))
+    except Exception:
+        park_factors_df = None
+
+    from api import mlb_api as _mlb_api
+    ctx = game_context_service.build_game_context(
+        game            = game,
+        hit_results     = hit_results,
+        hr_results      = hr_results,
+        park_factors_df = park_factors_df,
+        mlb_api         = _mlb_api,
+        date_str        = date_str,
+    )
+
+    gemini_cache_key = f"gemini_game_{game_pk}_{date_str}"
+    breakdown = gemini_service.explain_game(
+        ctx,
+        cache=_cache,
+        cache_key=gemini_cache_key,
+        force=force,
+    )
+
+    return jsonify({**ctx, "breakdown": breakdown})
 
 
 @bp.route("/api/live")

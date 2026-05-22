@@ -75,8 +75,13 @@ def calculate_component_scores(
     # Park factor
     park_score = normalize_value(park_hit_factor, "park_factor")
 
-    # Recent form — 14-day average
-    recent_score = normalize_value(batter.recent_avg, "recent_avg")
+    # Recent form — 14-day average.
+    # Fall back to season avg when recent-form data was not loaded (circuit breaker / API
+    # failure).  A true 0.0 recent avg is not achievable for any qualified MLB batter, so
+    # 0.0 unambiguously signals a missing value rather than genuinely terrible recent form.
+    # Using season avg keeps the score neutral rather than artificially penalising the player.
+    recent_val   = batter.recent_avg if batter.recent_avg > 0.0 else batter.avg
+    recent_score = normalize_value(recent_val, "recent_avg")
 
     # Lineup position — inverted: position 1 gets highest score (more PAs)
     lineup_score = normalize_value(10 - batter.lineup_position, "lineup_pos")
