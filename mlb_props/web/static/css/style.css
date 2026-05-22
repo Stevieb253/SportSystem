@@ -1071,6 +1071,141 @@ a { color: inherit; text-decoration: none; }
 .hr-mini-prob { font-family: var(--font-mono); font-size: 0.73rem; color: var(--muted); width: 54px; text-align: right; flex-shrink: 0; }
 
 /* ══════════════════════════════════════════════════════════════
+   GAME PAGE LINEUP — CSS GRID (replaces flex-based lineup rows)
+   9 fixed columns shared by .lu-header and every .lu-row so
+   header and data cells are always pixel-perfect aligned.
+   Col: POS | PLAYER | AVG | XBA | BRRL% | HIT PROB | HR% | PICK | AI
+══════════════════════════════════════════════════════════════ */
+
+/* Shared grid definition — applied to both header and player rows */
+.lu-grid {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 40px 40px 46px 82px 46px 44px 28px;
+  align-items: center;
+  column-gap: 4px;
+}
+
+/* ── Column header bar ─────────────────────────────────────── */
+.lu-header {
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 0.28rem;
+}
+/* Right-align numeric header labels */
+.lu-header .lu-r { text-align: right; }
+.lu-header .lu-accent { color: var(--accent); }
+
+/* ── Player rows ───────────────────────────────────────────── */
+.lu-row {
+  padding: 0.55rem 0.6rem;
+  border-radius: var(--radius);
+  margin-bottom: 0.2rem;
+  border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+.lu-row:hover                { background: var(--surface); }
+.lu-row.verdict-yes          { border-left-color: var(--green);  background: #f0fdf4; }
+.lu-row.verdict-lean         { border-left-color: var(--orange); background: #fff7ed; }
+
+/* ── Cell styles ───────────────────────────────────────────── */
+.lu-pos {
+  font-family: var(--font-mono);
+  font-size: 0.77rem;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.lu-player { min-width: 0; }
+.lu-name {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lu-hand {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  color: var(--muted);
+}
+
+/* Numeric stat cells — right-aligned, no-wrap */
+.lu-avg, .lu-xba, .lu-brrl, .lu-hr-pct {
+  font-family: var(--font-mono);
+  font-size: 0.79rem;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.lu-avg  { color: var(--text-2); }
+.lu-xba  { color: var(--accent); font-weight: 700; }
+.lu-brrl { color: var(--muted); }
+.lu-hr-pct { color: var(--muted); font-size: 0.76rem; }
+
+/* HIT PROB column: mini bar + percentage side by side */
+.lu-hit-prob {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.lu-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+  min-width: 14px;
+}
+.lu-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #60a5fa);
+  border-radius: 99px;
+  min-width: 2px;
+}
+.lu-hit-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 26px;
+  text-align: right;
+}
+
+/* AI icon button — compact circle */
+.btn-explain-icon {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 0.68rem;
+}
+
+/* ── Responsive: below the 2-col split breakpoint, single-column
+      layout so each side gets full width — columns can be wider  */
+@media (max-width: 860px) {
+  .lu-grid {
+    grid-template-columns: 22px minmax(0, 1fr) 42px 42px 48px 88px 48px 46px 28px;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
    PLAYER STAT HIGHLIGHTS
 ══════════════════════════════════════════════════════════════ */
 .highlight-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 0.85rem; }
@@ -1865,22 +2000,48 @@ a { color: inherit; text-decoration: none; }
   text-align: right;
 }
 
+/* ── AI Analysis card ────────────────────────────────────── */
+.ed-ai-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: visible; /* never clip text */
+  margin-bottom: 0.15rem;
+}
+.ed-ai-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 1rem 0;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ed-ai-icon {
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
 /* ── Explanation text ────────────────────────────────────── */
 .ed-explanation {
+  /* no max-height, no overflow hidden — drawer body scrolls instead */
   font-size: 0.9rem;
   color: var(--text-2);
-  line-height: 1.75;
-  background: #f0f6ff;
-  border-left: 3px solid var(--accent);
-  padding: 0.9rem 1rem;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  margin-bottom: 0.2rem;
+  line-height: 1.78;
+  padding: 0.6rem 1rem 0.85rem;
+  margin: 0;
+  white-space: pre-wrap;  /* preserve line breaks from Gemini */
+  word-break: break-word;
 }
 .ed-explanation-unavailable {
-  font-size: 0.82rem;
+  font-size: 0.84rem;
   color: var(--muted);
   font-style: italic;
-  padding: 0.6rem 0;
+  padding: 0.6rem 1rem 0.85rem;
+  margin: 0;
+  line-height: 1.65;
 }
 
 /* ── Factor lists ────────────────────────────────────────── */
@@ -2212,3 +2373,355 @@ a { color: inherit; text-decoration: none; }
   .ed-weather-grid { grid-template-columns: repeat(2, 1fr); }
   .ed-bvp-block { gap: 0.3rem; }
 }
+
+
+/* ══════════════════════════════════════════════════════════════
+   AI GAME BREAKDOWN
+══════════════════════════════════════════════════════════════ */
+
+/* Static disclaimer — always visible under the header */
+.gb-disclaimer {
+  font-size: 0.73rem;
+  color: var(--muted);
+  margin: 0.25rem 0 0.15rem;
+  line-height: 1.45;
+}
+
+/* Fallback note — shown when Gemini JSON was malformed and local data was used */
+.gb-fallback-note {
+  font-size: 0.8rem;
+  color: #854d0e;          /* amber-900 */
+  background: #fef3c7;    /* amber-100 */
+  border: 1px solid #f59e0b; /* amber-400 */
+  border-radius: var(--radius);
+  padding: 0.55rem 0.8rem;
+  margin-bottom: 0.85rem;
+}
+
+/* Safety alert — shown when server flags betting language in response */
+.gb-safety-alert {
+  font-size: 0.8rem;
+  color: #92400e;          /* amber-800 */
+  background: #fffbeb;    /* amber-50 */
+  border: 1px solid #fcd34d; /* amber-300 */
+  border-radius: var(--radius);
+  padding: 0.55rem 0.8rem;
+  margin-bottom: 0.85rem;
+}
+
+/* Card header: title + button side-by-side */
+.gb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.gb-title {
+  margin: 0;         /* override section-title margin */
+  flex: 1 1 auto;
+}
+.gb-icon {
+  color: var(--accent);
+  margin-right: 0.25rem;
+}
+
+/* Trigger button */
+.btn-game-breakdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.42rem 0.95rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.btn-game-breakdown:hover { background: #1d4ed8; }
+.btn-game-breakdown--loading,
+.btn-game-breakdown:disabled {
+  opacity: 0.5;
+  cursor: wait;
+  pointer-events: none;
+}
+
+/* Body revealed after fetch */
+.gb-body {
+  margin-top: 1rem;
+}
+
+/* Top narrative summary */
+.gb-summary {
+  margin-bottom: 1rem;
+}
+.gb-text {
+  font-size: 0.9rem;
+  color: var(--text-2);
+  line-height: 1.75;
+  margin: 0;
+}
+
+/* Three-column analysis grid */
+.gb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+@media (max-width: 860px) {
+  .gb-grid { grid-template-columns: 1fr; }
+}
+
+.gb-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 0.95rem;
+}
+.gb-col-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.45rem;
+}
+.gb-col .gb-text {
+  font-size: 0.86rem;
+}
+
+/* Win scenarios — two-column */
+.gb-reasons-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+@media (max-width: 640px) {
+  .gb-reasons-grid { grid-template-columns: 1fr; }
+}
+
+.gb-reasons-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 0.95rem;
+}
+.gb-reasons-col .gb-col-label {
+  color: var(--orange);
+}
+.gb-reasons-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.86rem;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.gb-reasons-list li + li {
+  margin-top: 0.25rem;
+}
+
+/* Data caveats — subtle footnote bar */
+.gb-caveats {
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.5rem;
+}
+.gb-caveats-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.3rem;
+}
+
+/* Model attribution tag */
+.gb-model-tag {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-align: right;
+  margin-top: 0.25rem;
+}
+
+/* Dev-only regenerate toolbar */
+.gb-dev-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+}
+
+.btn-regenerate {
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-regenerate:hover {
+  color: var(--text);
+  border-color: var(--text-secondary, #6b7280);
+}
+
+/* Unavailable / error state */
+.gb-unavailable {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.1rem;
+}
+.gb-unavailable p {
+  font-size: 0.88rem;
+  color: var(--text-2);
+  margin: 0 0 0.3rem;
+}
+.gb-error-detail {
+  font-size: 0.76rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+/* ── Edge summary cards row ──────────────────────────────────────── */
+.gb-edge-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.65rem;
+  margin-bottom: 1.1rem;
+}
+@media (max-width: 700px) {
+  .gb-edge-row { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 420px) {
+  .gb-edge-row { grid-template-columns: 1fr 1fr; }
+}
+
+.gb-edge-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.7rem 0.85rem;
+  text-align: center;
+}
+.gb-edge-title {
+  font-family: var(--font-mono);
+  font-size: 0.60rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+.gb-edge-value {
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  border-radius: var(--radius);
+  padding: 0.2rem 0.5rem;
+  display: inline-block;
+}
+
+/* Edge value color variants */
+.gb-edge--home, .gb-edge--away   { background: var(--accent-dim); color: var(--accent); }
+.gb-edge--neutral                 { background: var(--surface); color: var(--text-2); border: 1px solid var(--border); }
+.gb-edge--mixed                   { background: #f0fdf4; color: var(--green); }
+.gb-edge--hitter                  { background: #fff7ed; color: var(--orange); }
+.gb-edge--pitcher                 { background: #eff6ff; color: var(--accent); }
+.gb-edge--na                      { background: var(--surface); color: var(--muted); }
+.gb-edge--strong                  { background: #f0fdf4; color: var(--green); }
+.gb-edge--moderate                { background: var(--accent-dim); color: var(--accent); }
+.gb-edge--slight                  { background: #fff7ed; color: var(--orange); }
+.gb-edge--low                     { background: var(--surface); color: var(--muted); }
+
+/* ── Key Matchup Players ─────────────────────────────────────────── */
+.gb-kp-section {
+  margin-bottom: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.gb-kp-header {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0.55rem 0.9rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+.gb-kp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+@media (max-width: 640px) {
+  .gb-kp-grid { grid-template-columns: 1fr; }
+}
+.gb-kp-col {
+  padding: 0.4rem 0.5rem 0.6rem;
+}
+.gb-kp-col + .gb-kp-col {
+  border-left: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .gb-kp-col + .gb-kp-col { border-left: none; border-top: 1px solid var(--border); }
+}
+.gb-kp-col-label {
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 0.3rem 0.4rem 0.2rem;
+}
+.gb-kp-row {
+  display: grid;
+  grid-template-columns: 30px 1fr 36px auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0.28rem 0.4rem;
+  border-radius: var(--radius);
+  font-size: 0.81rem;
+}
+.gb-kp-row:hover { background: var(--bg); }
+.gb-kp-row.gb-kp-yes  { background: #f0fdf4; }
+.gb-kp-row.gb-kp-lean { background: #fff7ed; }
+.gb-kp-team {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.gb-kp-name {
+  color: var(--text-1);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gb-kp-prob {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: right;
+}
+.gb-kp-verdict { flex-shrink: 0; }

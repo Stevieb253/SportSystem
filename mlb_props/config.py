@@ -237,3 +237,13 @@ SAVANT_BATTER_ARSENAL_URL = "https://baseballsavant.mlb.com/player-services/batt
 DEBUG = False
 PORT  = 5000
 HOST  = "0.0.0.0"
+
+# ── Gemini Debug ───────────────────────────────────────────────────────────────
+# Set GEMINI_DEBUG=true in .env to write every prompt + structured context to
+# disk before sending to the API. Files land in GEMINI_DEBUG_DIR.
+# Leave off in production — can log sensitive player/game data.
+GEMINI_DEBUG     = os.getenv("GEMINI_DEBUG", "").lower() in ("1", "true", "yes")
+GEMINI_DEBUG_DIR = os.getenv(
+    "GEMINI_DEBUG_DIR",
+    str(Path(__file__).parent / "debug" / "gemini"),
+)

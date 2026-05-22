@@ -95,6 +95,24 @@
   {% endif %}
 </div>
 
+<!-- ── AI Game Breakdown ── -->
+<div class="section-card" id="game-breakdown-card">
+  <div class="gb-header">
+    <h2 class="section-title gb-title">
+      <span class="gb-icon">&#x2736;</span> AI Game Breakdown
+    </h2>
+    <button class="btn-game-breakdown" id="btn-game-breakdown"
+            data-game-pk="{{ gdict.get('game_pk', 0) }}"
+            data-date="{{ selected_date }}">
+      Generate Analysis
+    </button>
+  </div>
+  <p class="gb-disclaimer">AI-generated contextual analysis using structured MLB data. For informational purposes only — not betting advice.</p>
+  <div class="gb-body" id="gb-body" hidden>
+    <!-- filled by JS — all stats shown are from structured backend data, not parsed from AI prose -->
+  </div>
+</div>
+
 <!-- ── Pitching matchup ── -->
 <div class="section-card">
   <h2 class="section-title">Pitching Matchup</h2>
@@ -167,16 +185,18 @@
         <img src="{{ team_logo_src }}" class="lineup-team-logo" alt="{{ team_abbr_t }}" onerror="this.style.display='none'" />
         <h3 class="lineup-team-label">{{ team_abbr_t | team_name }}</h3>
       </div>
-      <!-- Column legend — one per side so it aligns with the rows below -->
-      <div class="lineup-legend">
-        <span class="ll-pos">POS</span>
-        <span class="ll-name">PLAYER</span>
-        <span class="ll-stat" title="Batting Average">AVG</span>
-        <span class="ll-stat accent" title="Expected Batting Average (Statcast)">xBA</span>
-        <span class="ll-stat" title="Barrel%">BRRL%</span>
-        <span class="ll-prob">HIT PROB</span>
-        <span class="ll-hr">HR%</span>
-        <span class="ll-verdict">PICK</span>
+
+      <!-- Column header — same grid template as every player row -->
+      <div class="lu-header lu-grid">
+        <span>POS</span>
+        <span>PLAYER</span>
+        <span class="lu-r" title="Batting Average">AVG</span>
+        <span class="lu-r lu-accent" title="Expected Batting Average">XBA</span>
+        <span class="lu-r" title="Barrel%">BRRL%</span>
+        <span class="lu-r">HIT PROB</span>
+        <span class="lu-r">HR%</span>
+        <span class="lu-r">PICK</span>
+        <span class="lu-r">AI</span>
       </div>
 
       {% for r in team_results | sort(attribute='player.lineup_position') %}
@@ -187,25 +207,25 @@
       {% set hr_result = hr_results | selectattr('player.player_id', 'equalto', pdict.get('player_id',0)) | first | default(none) %}
       {% set hr_prob = hr_result.hr_probability if hr_result and hr_result is not mapping else (hr_result.get('hr_probability',0) if hr_result else 0) %}
 
-      <div class="lineup-row verdict-{{ verdict|lower }}">
-        <span class="lineup-pos mono">{{ pdict.get('lineup_position','') }}</span>
-        <div class="lineup-player-info">
-          <span class="lineup-name">{{ pdict.get('name','') }}</span>
-          <span class="lineup-hand">{{ pdict.get('hand','') }}</span>
+      <div class="lu-row lu-grid verdict-{{ verdict|lower }}">
+        <span class="lu-pos">{{ pdict.get('lineup_position','') }}</span>
+        <div class="lu-player">
+          <span class="lu-name">{{ pdict.get('name','') }}</span>
+          <span class="lu-hand">{{ pdict.get('hand','') }}</span>
         </div>
-        <div class="lineup-stats">
-          <span class="mono ls-avg" title="Batting Average">{{ "%.3f"|format(pdict.get('avg',0)) }}</span>
-          <span class="mono accent ls-xba" title="Expected BA">{{ "%.3f"|format(pdict.get('xba',0)) }}</span>
-          <span class="mono ls-barrel" title="Barrel%">{{ "%.1f"|format(pdict.get('barrel_pct',0)*100) }}%</span>
+        <span class="lu-avg">{{ "%.3f"|format(pdict.get('avg',0)) }}</span>
+        <span class="lu-xba">{{ "%.3f"|format(pdict.get('xba',0)) }}</span>
+        <span class="lu-brrl">{{ "%.1f"|format(pdict.get('barrel_pct',0)*100) }}%</span>
+        <div class="lu-hit-prob">
+          <div class="lu-bar"><div class="lu-bar-fill" style="width:{{ (hit_prob*100)|round|int }}%"></div></div>
+          <span class="lu-hit-label">{{ "%.0f"|format(hit_prob*100) }}%</span>
         </div>
-        <div class="lineup-probs">
-          <div class="mini-prob-bar">
-            <div class="mini-bar-fill" style="width:{{ (hit_prob*100)|round|int }}%"></div>
-            <span class="mini-prob-label mono">{{ "%.0f"|format(hit_prob*100) }}%</span>
-          </div>
-          <span class="hr-mini-prob mono">HR {{ "%.1f"|format(hr_prob*100) }}%</span>
-        </div>
+        <span class="lu-hr-pct">{{ "%.1f"|format(hr_prob*100) }}%</span>
         <span class="verdict-badge badge-{{ verdict|lower }} verdict-sm">{{ verdict }}</span>
+        <button class="btn-explain btn-explain-icon"
+                data-player-id="{{ pdict.get('player_id', 0) }}"
+                data-prop-type="hit"
+                title="AI Analysis">&#x2736;</button>
       </div>
       {% endfor %}
     </div>
@@ -279,6 +299,293 @@
 
     updateScore();
     setInterval(updateScore, 2 * 60 * 1000);
+
+    // ── AI Game Breakdown ─────────────────────────────────────────────────
+    //
+    // DATA INTEGRITY NOTE:
+    // All numeric statistics shown on this page (lineup probabilities, pitcher
+    // stats, weather, park factors) come exclusively from structured backend data
+    // served by the model pipeline — never from parsing Gemini's prose.
+    //
+    // The AI breakdown fields (summary, pitching_edge, offensive_edge, etc.) are
+    // plain-English narrative only. No numbers are extracted from Gemini text.
+    // Any number a user sees in the lineup table was computed by the probability
+    // model and formatted server-side before Gemini was ever called.
+    {% if debug %}
+    window.GAME_BREAKDOWN_DEV = true;
+    {% endif %}
+
+    (function () {
+      var btn  = document.getElementById('btn-game-breakdown');
+      var body = document.getElementById('gb-body');
+      if (!btn || !body) return;
+
+      var _fetched = false;
+      var _loading = false;
+
+      function _esc(s) {
+        return String(s || '')
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+
+      // Edge label → display config
+      // Returns {label, colorClass}
+      function _edgeMeta(type, value, homeAbbr, awayAbbr) {
+        var labels = {
+          // pitching / offense edge
+          'home':             { text: homeAbbr, cls: 'gb-edge--home' },
+          'away':             { text: awayAbbr, cls: 'gb-edge--away' },
+          'neutral':          { text: 'Even',   cls: 'gb-edge--neutral' },
+          'mixed':            { text: 'Mixed',  cls: 'gb-edge--mixed' },
+          // park/weather edge
+          'hitter_friendly':  { text: 'Hitter Friendly',  cls: 'gb-edge--hitter' },
+          'pitcher_friendly': { text: 'Pitcher Friendly', cls: 'gb-edge--pitcher' },
+          'unavailable':      { text: 'N/A',    cls: 'gb-edge--na' },
+          // confidence
+          'strong':           { text: 'Strong',   cls: 'gb-edge--strong' },
+          'moderate':         { text: 'Moderate', cls: 'gb-edge--moderate' },
+          'slight':           { text: 'Slight',   cls: 'gb-edge--slight' },
+          'low':              { text: 'Low',      cls: 'gb-edge--low' },
+        };
+        return labels[value] || { text: value || 'N/A', cls: 'gb-edge--neutral' };
+      }
+
+      function _edgeCard(title, value, type, homeAbbr, awayAbbr) {
+        var meta = _edgeMeta(type, value, homeAbbr, awayAbbr);
+        return '<div class="gb-edge-card">' +
+          '<div class="gb-edge-title">' + _esc(title) + '</div>' +
+          '<div class="gb-edge-value ' + meta.cls + '">' + _esc(meta.text) + '</div>' +
+          '</div>';
+      }
+
+      function _kpHitRows(players, teamAbbr) {
+        if (!players || !players.length) return '';
+        var html = '';
+        players.forEach(function(p) {
+          var pct = p.hit_prob ? Math.round(p.hit_prob * 100) : 0;
+          var verdict = p.verdict || '';
+          var cls = verdict === 'YES' ? 'gb-kp-yes' : (verdict === 'LEAN' ? 'gb-kp-lean' : '');
+          html += '<div class="gb-kp-row ' + cls + '">';
+          html += '<span class="gb-kp-team">' + _esc(teamAbbr) + '</span>';
+          html += '<span class="gb-kp-name">' + _esc(p.name || '') + '</span>';
+          html += '<span class="gb-kp-prob">' + pct + '%</span>';
+          if (verdict) html += '<span class="gb-kp-verdict badge-' + verdict.toLowerCase() + ' verdict-sm">' + _esc(verdict) + '</span>';
+          html += '</div>';
+        });
+        return html;
+      }
+
+      function _kpHrRows(players, teamAbbr) {
+        if (!players || !players.length) return '';
+        var html = '';
+        players.forEach(function(p) {
+          var pct = p.hr_prob ? (p.hr_prob * 100).toFixed(1) : '0.0';
+          html += '<div class="gb-kp-row">';
+          html += '<span class="gb-kp-team">' + _esc(teamAbbr) + '</span>';
+          html += '<span class="gb-kp-name">' + _esc(p.name || '') + '</span>';
+          html += '<span class="gb-kp-prob">' + pct + '%</span>';
+          html += '</div>';
+        });
+        return html;
+      }
+
+      function _renderBreakdown(ctx) {
+        var bd = ctx.breakdown || {};
+        var home = ctx.home_team || {};
+        var away = ctx.away_team || {};
+        var homeAbbr = home.abbreviation || 'HOME';
+        var awayAbbr = away.abbreviation || 'AWAY';
+        var edges = ctx.edges || {};
+        var kp = ctx.key_players || {};
+
+        var html = '';
+
+        // ── Unavailable state ──
+        if (!bd.available) {
+          html += '<div class="gb-unavailable">';
+          html += '<p>AI analysis is temporarily unavailable. The matchup data above is still current.</p>';
+          if (bd.error) html += '<p class="gb-error-detail">' + _esc(bd.error) + '</p>';
+          html += '</div>';
+          body.innerHTML = html;
+          body.hidden = false;
+          return;
+        }
+
+        // ── Fallback summary note ──
+        if (bd.used_fallback_summary) {
+          html += '<div class="gb-fallback-note">📋 Gemini response was malformed — this summary was generated from structured model data instead of AI prose.</div>';
+          console.warn('[game-breakdown] used_fallback_summary = true');
+        }
+
+        // ── Safety alert ──
+        var flags = bd.safety_flags || {};
+        if (flags.betting_language) {
+          html += '<div class="gb-safety-alert">⚠ This response was flagged for possible betting language. It is informational only and does not constitute betting advice.</div>';
+          console.warn('[game-breakdown] safety_flags.betting_language = true');
+        }
+
+        // ── Edge summary cards (from structured backend data — NOT from Gemini text) ──
+        // These labels are computed by game_context_service from raw stats and are
+        // always accurate regardless of AI response quality.
+        html += '<div class="gb-edge-row">';
+        html += _edgeCard('Pitching Edge', edges.starting_pitching_edge, 'pitch', homeAbbr, awayAbbr);
+        html += _edgeCard('Offensive Edge', edges.offensive_projection_edge, 'offense', homeAbbr, awayAbbr);
+        html += _edgeCard('Venue / Weather', edges.weather_park_edge, 'park', homeAbbr, awayAbbr);
+        html += _edgeCard('Confidence', edges.confidence_tier, 'confidence', homeAbbr, awayAbbr);
+        html += '</div>';
+
+        // ── Summary ──
+        if (bd.summary) {
+          html += '<div class="gb-section gb-summary">';
+          html += '<p class="gb-text">' + _esc(bd.summary) + '</p>';
+          html += '</div>';
+        }
+
+        // ── Three-column analysis grid (Gemini prose) ──
+        var hasGrid = bd.pitching_edge || bd.offensive_edge || bd.weather_park_impact;
+        if (hasGrid) {
+          html += '<div class="gb-grid">';
+          if (bd.pitching_edge) {
+            html += '<div class="gb-col"><div class="gb-col-label">⚾ Pitching</div>';
+            html += '<p class="gb-text">' + _esc(bd.pitching_edge) + '</p></div>';
+          }
+          if (bd.offensive_edge) {
+            html += '<div class="gb-col"><div class="gb-col-label">🏏 Offense</div>';
+            html += '<p class="gb-text">' + _esc(bd.offensive_edge) + '</p></div>';
+          }
+          if (bd.weather_park_impact) {
+            html += '<div class="gb-col"><div class="gb-col-label">🌤 Venue</div>';
+            html += '<p class="gb-text">' + _esc(bd.weather_park_impact) + '</p></div>';
+          }
+          html += '</div>';
+        }
+
+        // ── Key Matchup Players (from structured backend data — NOT from Gemini text) ──
+        var homeKp = kp.home || {};
+        var awayKp = kp.away || {};
+        var homeHit = homeKp.top_hit || [];
+        var awayHit = awayKp.top_hit || [];
+        var homeHr  = homeKp.top_hr  || [];
+        var awayHr  = awayKp.top_hr  || [];
+
+        if (homeHit.length || awayHit.length) {
+          html += '<div class="gb-kp-section">';
+          html += '<div class="gb-kp-header">Key Matchup Players</div>';
+          html += '<div class="gb-kp-grid">';
+
+          // Hit targets
+          html += '<div class="gb-kp-col">';
+          html += '<div class="gb-kp-col-label">🎯 Key Hit Targets</div>';
+          html += _kpHitRows(awayHit, awayAbbr) + _kpHitRows(homeHit, homeAbbr);
+          html += '</div>';
+
+          // Power targets
+          html += '<div class="gb-kp-col">';
+          html += '<div class="gb-kp-col-label">💥 Key Power Targets</div>';
+          html += _kpHrRows(awayHr, awayAbbr) + _kpHrRows(homeHr, homeAbbr);
+          html += '</div>';
+
+          html += '</div></div>';
+        }
+
+        // ── Win scenarios ──
+        var awayReasons = bd.reasons_away_could_win || [];
+        var homeReasons = bd.reasons_home_could_win || [];
+        if (awayReasons.length || homeReasons.length) {
+          html += '<div class="gb-reasons-grid">';
+          html += '<div class="gb-reasons-col">';
+          html += '<div class="gb-col-label">' + _esc(awayAbbr) + ' Could Win If…</div>';
+          html += '<ul class="gb-reasons-list">';
+          awayReasons.forEach(function(r) { html += '<li>' + _esc(r) + '</li>'; });
+          html += '</ul></div>';
+          html += '<div class="gb-reasons-col">';
+          html += '<div class="gb-col-label">' + _esc(homeAbbr) + ' Could Win If…</div>';
+          html += '<ul class="gb-reasons-list">';
+          homeReasons.forEach(function(r) { html += '<li>' + _esc(r) + '</li>'; });
+          html += '</ul></div>';
+          html += '</div>';
+        }
+
+        // ── Data caveats ──
+        var caveats = bd.data_caveats || [];
+        if (caveats.length) {
+          html += '<div class="gb-caveats">';
+          html += '<span class="gb-caveats-label">Data notes:</span> ';
+          html += caveats.map(function(c) { return _esc(c); }).join(' · ');
+          html += '</div>';
+        }
+
+        // ── Model tag ──
+        if (bd.model) {
+          html += '<div class="gb-model-tag">Generated by ' + _esc(bd.model) + '</div>';
+        }
+
+        // ── Dev: Regenerate button (only when window.GAME_BREAKDOWN_DEV = true) ──
+        if (window.GAME_BREAKDOWN_DEV) {
+          html += '<div class="gb-dev-bar">';
+          html += '<button class="btn-regenerate" id="btn-regenerate-breakdown" title="Bypass cache and regenerate from Gemini (dev only)">↺ Regenerate Analysis</button>';
+          html += '</div>';
+        }
+
+        body.innerHTML = html;
+        body.hidden = false;
+
+        // Wire up the regenerate button after innerHTML is set.
+        if (window.GAME_BREAKDOWN_DEV) {
+          var regenBtn = document.getElementById('btn-regenerate-breakdown');
+          if (regenBtn) {
+            regenBtn.addEventListener('click', function () {
+              _fetched = false;
+              btn.style.display = '';
+              _doFetch(true);
+            });
+          }
+        }
+      }
+
+      function _renderError(msg) {
+        body.innerHTML = '<div class="gb-unavailable"><p>' + _esc(msg || 'Failed to load AI analysis. Please try again.') + '</p></div>';
+        body.hidden = false;
+      }
+
+      function _setLoading(on) {
+        _loading = on;
+        btn.disabled = on;
+        btn.textContent = on ? 'Generating…' : 'Generate Analysis';
+        btn.classList.toggle('btn-game-breakdown--loading', on);
+      }
+
+      function _doFetch(forceRefresh) {
+        if (_loading) return;
+        _setLoading(true);
+        body.hidden = true;
+
+        var gamePk  = btn.dataset.gamePk;
+        var dateVal = btn.dataset.date;
+        var qs      = dateVal ? ('?date=' + dateVal) : '?';
+        if (forceRefresh) qs += (qs === '?' ? '' : '&') + 'force=1';
+
+        fetch('/api/game/' + gamePk + '/explain' + qs)
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            _fetched = true;
+            _setLoading(false);
+            btn.style.display = 'none';
+            _renderBreakdown(data);
+          })
+          .catch(function(err) {
+            _setLoading(false);
+            _renderError();
+            console.warn('[game-breakdown] fetch error:', err);
+          });
+      }
+
+      btn.addEventListener('click', function () {
+        if (_loading || _fetched) return;
+        _doFetch(false);
+      });
+    })();
 
     {% if gdict.get('status') == 'live' %}
     // Live pitch log

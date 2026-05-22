@@ -780,41 +780,6 @@
 </div>
 {# end tab-bets #}
 
-{# ── Explain Drawer — single reusable panel for all prop cards ── #}
-<div class="explain-overlay" id="explain-overlay"></div>
-<div class="explain-drawer" id="explain-drawer" aria-hidden="true">
-  <div class="ed-header">
-    <div class="ed-header-left">
-      <img class="ed-headshot"
-           src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E"
-           alt="" />
-      <div>
-        <div class="ed-player-name">—</div>
-        <div class="ed-player-meta">—</div>
-      </div>
-    </div>
-    <div class="ed-header-right">
-      <span class="ed-prob-pill">—</span>
-      <span class="ed-verdict-pill ed-verdict-no">—</span>
-      <button class="ed-close" id="explain-close" aria-label="Close panel">&#x2715;</button>
-    </div>
-  </div>
-  <div class="ed-tab-bar">
-    <button class="ed-tab-btn active" data-tab="summary">Summary</button>
-    <button class="ed-tab-btn" data-tab="matchup">Matchup</button>
-    <button class="ed-tab-btn" data-tab="arsenal">Pitch Arsenal</button>
-    <button class="ed-tab-btn" data-tab="weather">Weather &amp; Park</button>
-    <button class="ed-tab-btn" data-tab="odds">Odds &amp; Edge</button>
-  </div>
-  <div class="ed-body">
-    <div class="ed-pane active" data-pane="summary"></div>
-    <div class="ed-pane" data-pane="matchup"></div>
-    <div class="ed-pane" data-pane="arsenal"></div>
-    <div class="ed-pane" data-pane="weather"></div>
-    <div class="ed-pane" data-pane="odds"></div>
-  </div>
-</div>
-
 {% endblock %}
 
 {% block extra_js %}
