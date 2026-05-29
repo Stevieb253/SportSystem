@@ -635,9 +635,15 @@ def get_standings(season: int) -> dict:
     Returns:
         Raw standings dict.
     """
+    # Standings update after every game — use a 2h TTL so the game detail page
+    # shows last night's results rather than potentially 12h-stale data.
+    # This TTL is applied on every game-detail load (via build_game_context),
+    # independent of the model rebuild cycle.
+    _STANDINGS_TTL_HOURS = 2.0
+
     cache_key = f"mlb_standings_{season}"
     if _cache:
-        cached = _cache.get(cache_key)
+        cached = _cache.get(cache_key, ttl_hours=_STANDINGS_TTL_HOURS)
         if cached is not None:
             return cached
 
