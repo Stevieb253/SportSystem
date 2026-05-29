@@ -472,6 +472,30 @@ def _player_team(result: Any) -> str:
     return ""
 
 
+def _format_streak(streak_code: str) -> str:
+    """Convert a raw MLB API streakCode ('W3', 'L1') to plain English.
+
+    Rules:
+      W1  → "Won last game"       (not "win streak" — only one game)
+      W2+ → "2-game win streak"
+      L1  → "Lost last game"
+      L2+ → "2-game losing streak"
+      ""  → ""
+    """
+    if not streak_code or len(streak_code) < 2:
+        return ""
+    direction = streak_code[0].upper()
+    try:
+        n = int(streak_code[1:])
+    except ValueError:
+        return streak_code  # pass through unrecognised codes unchanged
+    if direction == "W":
+        return "Won last game" if n == 1 else f"{n}-game win streak"
+    if direction == "L":
+        return "Lost last game" if n == 1 else f"{n}-game losing streak"
+    return streak_code
+
+
 def _parse_standings(raw: dict) -> dict:
     """Parse MLB API standings response into {team_id: record_dict}."""
     out: dict = {}
@@ -500,16 +524,17 @@ def _parse_standings(raw: dict) -> dict:
                     break
 
             out[team_id] = {
-                "wins":           wins,
-                "losses":         losses,
-                "win_pct":        tr.get("winningPercentage"),
-                "streak":         streak_code,
-                "home_wins":      hr.get("wins"),
-                "home_losses":    hr.get("losses"),
-                "away_wins":      ar.get("wins"),
-                "away_losses":    ar.get("losses"),
-                "last_ten_wins":  l10w,
-                "last_ten_losses": l10l,
+                "wins":              wins,
+                "losses":            losses,
+                "win_pct":           tr.get("winningPercentage"),
+                "streak":            streak_code,               # raw: "W3", "L1", ""
+                "streak_label":      _format_streak(streak_code),  # human: "3-game win streak"
+                "home_wins":         hr.get("wins"),
+                "home_losses":       hr.get("losses"),
+                "away_wins":         ar.get("wins"),
+                "away_losses":       ar.get("losses"),
+                "last_ten_wins":     l10w,
+                "last_ten_losses":   l10l,
             }
     return out
 
@@ -533,17 +558,18 @@ def _team_form(record: dict) -> dict:
     l10w = record.get("last_ten_wins")
     l10l = record.get("last_ten_losses")
     return {
-        "available":      True,
-        "wins":           record.get("wins"),
-        "losses":         record.get("losses"),
-        "win_pct":        record.get("win_pct"),
-        "streak":         record.get("streak", ""),
-        "last_ten_wins":  l10w,
+        "available":       True,
+        "wins":            record.get("wins"),
+        "losses":          record.get("losses"),
+        "win_pct":         record.get("win_pct"),
+        "streak":          record.get("streak", ""),         # raw code, e.g. "W3"
+        "streak_label":    record.get("streak_label", ""),   # human text, e.g. "3-game win streak"
+        "last_ten_wins":   l10w,
         "last_ten_losses": l10l,
-        "home_wins":      record.get("home_wins"),
-        "home_losses":    record.get("home_losses"),
-        "away_wins":      record.get("away_wins"),
-        "away_losses":    record.get("away_losses"),
+        "home_wins":       record.get("home_wins"),
+        "home_losses":     record.get("home_losses"),
+        "away_wins":       record.get("away_wins"),
+        "away_losses":     record.get("away_losses"),
     }
 
 

@@ -1252,6 +1252,9 @@ def _build_game_prompt(ctx: dict) -> str:
         "6. NEVER reference odds, moneylines, spreads, totals, over/unders, or sportsbook lines — not provided.",
         "7. Only cite team-level aggregate stats (ERA, saves, etc.) if explicitly listed in BULLPEN or TEAM FORM sections.",
         "8. If standings are marked unavailable, do NOT state or estimate any win-loss records.",
+        "8b. STREAK WORDING: Use exactly the streak label provided (e.g. 'Won last game', '3-game win streak'). "
+        "NEVER say 'on a win streak' or 'on a losing streak' for a single-game result (W1 or L1). "
+        "NEVER say 'hot streak' or 'cold streak' from a single game. Mirror the label as given.",
         "9. Be concise and analytical. Each JSON field: 2-3 sentences max.",
         "10. Explain both teams fairly — do not simply favour one side.",
         "11. Return ONLY valid JSON matching the exact schema shown at the bottom. No markdown fences.",
@@ -1281,14 +1284,15 @@ def _build_game_prompt(ctx: dict) -> str:
         def _record_line(team: dict, form: dict, label: str) -> str:
             w, l = team.get("wins"), team.get("losses")
             pct  = team.get("win_pct", "")
-            stk  = team.get("streak", "")
+            # Use the human-readable streak label (e.g. "3-game win streak", "Won last game")
+            stk  = form.get("streak_label") or ""
             hw, hl = team.get("home_wins"), team.get("home_losses")
             aw, al = team.get("away_wins"), team.get("away_losses")
             l10w   = form.get("last_ten_wins")
             l10l   = form.get("last_ten_losses")
             parts = [f"{label}: {w}-{l} ({pct})"]
             if stk:
-                parts.append(f"streak {stk}")
+                parts.append(stk)
             if l10w is not None:
                 parts.append(f"last 10: {l10w}-{l10l}")
             if hw is not None:
@@ -1309,23 +1313,26 @@ def _build_game_prompt(ctx: dict) -> str:
     away_bp = bullpen.get("away") or {}
     if avail.get("team_pitching") and (home_bp.get("available") or away_bp.get("available")):
         lines.append("")
-        lines.append("TEAM PITCHING CONTEXT (season totals — includes starters + relievers):")
+        lines.append(
+            "TEAM PITCHING CONTEXT (season aggregate — ERA & WHIP cover full staff; "
+            "saves, blown saves & holds are reliever-specific):"
+        )
         for abbr, bp in [(away_abbr, away_bp), (home_abbr, home_bp)]:
             if not bp.get("available"):
                 continue
             parts = [f"{abbr}:"]
             if bp.get("era") is not None:
-                parts.append(f"team ERA {bp['era']:.2f}")
+                parts.append(f"team ERA {bp['era']:.2f} (starters+bullpen)")
             if bp.get("whip") is not None:
-                parts.append(f"WHIP {bp['whip']:.2f}")
+                parts.append(f"team WHIP {bp['whip']:.2f}")
             if bp.get("saves") is not None:
-                parts.append(f"{bp['saves']} saves")
+                parts.append(f"{bp['saves']} saves (relievers)")
             if bp.get("blown_saves") is not None:
-                parts.append(f"{bp['blown_saves']} blown saves")
+                parts.append(f"{bp['blown_saves']} blown saves (relievers)")
             if bp.get("save_pct") is not None:
                 parts.append(f"save% {bp['save_pct']:.1%}")
             if bp.get("holds") is not None:
-                parts.append(f"{bp['holds']} holds")
+                parts.append(f"{bp['holds']} holds (relievers)")
             lines.append("  " + " | ".join(parts))
 
     # ── Pitching Matchup (condensed to 4 most diagnostic stats) ───────────────
