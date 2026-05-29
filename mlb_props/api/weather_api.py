@@ -102,13 +102,15 @@ def get_weather(lat: float, lon: float) -> dict:
         return {}
 
 
-def get_stadium_weather(stadium_name: str) -> Weather:
+def get_stadium_weather(stadium_name: str, ttl_hours: float = 1.0) -> Weather:
     """Fetch weather for an MLB stadium by name.
 
     Dome stadiums receive neutral defaults — weather is irrelevant indoors.
 
     Args:
         stadium_name: Stadium name (full MLB API name accepted).
+        ttl_hours:    Cache TTL in hours (default 1.0).  Pass a shorter value
+                      (e.g. 0.5) for fresher data on the game detail page.
 
     Returns:
         Weather dataclass instance with condition_text populated.
@@ -131,13 +133,9 @@ def get_stadium_weather(stadium_name: str) -> Weather:
             cloud_cover_pct=0,
         )
 
-    # Weather is cached with a 1-hour TTL so the model always uses data that is
-    # at most ~1 hour old on its next rebuild (which happens every ~2 h today).
-    _WEATHER_CACHE_TTL_HOURS = 1.0
-
     cache_key = f"weather_{stadium_name.replace(' ', '_')}"
     if _cache:
-        cached = _cache.get(cache_key, ttl_hours=_WEATHER_CACHE_TTL_HOURS)
+        cached = _cache.get(cache_key, ttl_hours=ttl_hours)
         if cached is not None:
             # Restore the original fetch time from the cached dict so downstream
             # code (and the game detail template) can show an accurate timestamp.

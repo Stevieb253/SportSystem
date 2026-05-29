@@ -60,6 +60,28 @@ def build_game_context(
     home_id   = home.get("id", 0)
     away_id   = away.get("id", 0)
 
+    # ── Fresh weather lookup (30-min TTL, independent of the model cache) ─────
+    # The game dict carries weather baked in at model-build time (up to 2h old).
+    # Re-fetching here with a short TTL gives the game detail page current data
+    # without requiring a full model rebuild.
+    venue_name_for_wx = v.get("name", "")
+    if venue_name_for_wx:
+        try:
+            from api import weather_api as _weather_api
+            fresh = _weather_api.get_stadium_weather(venue_name_for_wx, ttl_hours=0.5)
+            if fresh is not None:
+                fresh_dict = _to_dict(fresh)
+                if fresh_dict.get("temp_f") is not None or fresh_dict.get("is_dome"):
+                    w = fresh_dict  # override model snapshot with fresh data
+                    logger.debug(
+                        "build_game_context: using fresh weather for '%s' (fetched_at=%s)",
+                        venue_name_for_wx,
+                        fresh_dict.get("fetched_at", "?"),
+                    )
+        except Exception as exc:
+            logger.debug("build_game_context: fresh weather fetch failed ('%s'): %s", venue_name_for_wx, exc)
+            # Fall through — use the model's baked-in weather
+
     # ── Split results by team ──────────────────────────────────────────────────
     home_hit = [r for r in hit_results if _player_team(r) == home_abbr]
     away_hit = [r for r in hit_results if _player_team(r) == away_abbr]

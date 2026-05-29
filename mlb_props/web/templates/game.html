@@ -227,7 +227,7 @@
 
   {# ── Weather ── #}
   {% if w.get('fetched_at') %}
-  <p class="gd-weather-ts">Weather as of {{ w.fetched_at[:16] | replace('T', ' ') }} UTC · refreshes with lineup updates</p>
+  <p class="gd-weather-ts">Weather as of {{ w.fetched_at[:16] | replace('T', ' ') }} UTC · updates every 30 min</p>
   {% endif %}
   {% if w.get('is_dome') %}
   <p class="dome-note">Indoor stadium — weather has no impact on the game.</p>
