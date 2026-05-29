@@ -807,8 +807,6 @@
     },
     {% endfor %}
   ];
-  console.log('[matchup] MLB_GAMES injected:', window.MLB_GAMES.length, 'games');
-
   // Build matchup pill bars NOW — MLB_GAMES is defined and DOM is ready.
   // (Cannot be done in main.js because main.js loads before this block runs.)
   _buildMatchupPills('hit');

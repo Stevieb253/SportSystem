@@ -180,23 +180,14 @@ function _setActiveMatchupPill(tab, matchup) {
 
 function _buildMatchupPills(tab) {
   var bar = document.getElementById(tab + '-matchup-bar');
-  console.log('[matchup] _buildMatchupPills("' + tab + '") — bar:', bar,
-              '| MLB_GAMES length:', (window.MLB_GAMES || []).length);
-
-  if (!bar) {
-    console.warn('[matchup] bar element not found for tab:', tab);
-    return;
-  }
+  if (!bar) return;
 
   var games = (window.MLB_GAMES || []).filter(function(g) {
     return g.away_abbr && g.home_abbr;
   });
 
-  console.log('[matchup] games after filter:', games.length, '| raw MLB_GAMES:', (window.MLB_GAMES || []).length);
-
   // Hide the bar entirely if there are no games (e.g. lineup data not yet loaded)
   if (!games.length) {
-    console.warn('[matchup] No valid games — hiding bar for tab:', tab);
     bar.style.display = 'none';
     return;
   }
@@ -256,9 +247,6 @@ function _buildMatchupPills(tab) {
   html += '</div>';
   bar.innerHTML = html;
 
-  var pillCount = bar.querySelectorAll('.mf-pill').length;
-  console.log('[matchup] Pills rendered for "' + tab + '":', pillCount,
-              '(including All Games pill)');
 }
 
 // ── Populate team dropdowns from row data ─────────────────────────────────────

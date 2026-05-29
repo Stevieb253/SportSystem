@@ -2967,41 +2967,33 @@ a { color: inherit; text-decoration: none; }
 .gb-kp-verdict { flex-shrink: 0; }
 
 /* ── Matchup Filter Bar ──────────────────────────────────────────────────── */
-/* Horizontally-scrollable pill row shown above Hit / HR table controls.     */
+/* Wrapping pill grid shown above Hit / HR table controls.                   */
 
 .mf-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.65rem 0 0.55rem;
-  margin-bottom: 0.6rem;
+  display: block;
+  padding: 0.6rem 0 0.65rem;
+  margin-bottom: 0.65rem;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;        /* Firefox */
-  flex-wrap: nowrap;
 }
-.mf-bar::-webkit-scrollbar { display: none; } /* Chrome / Safari */
 .mf-bar[style*="display: none"],
 .mf-bar:empty { display: none !important; }
 
-/* "Filter by matchup" label */
+/* "Filter by matchup" section heading — sits on its own line above pills */
 .mf-label {
+  display: block;
   font-size: 0.63rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-  padding-right: 0.15rem;
+  margin-bottom: 0.45rem;
 }
 
-/* Pill wrapper — allows gap-only layout without wrapping */
+/* Pill wrapper — wraps naturally into multiple rows */
 .mf-pills {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
-  flex-wrap: nowrap;
   align-items: center;
 }
 
@@ -3072,9 +3064,8 @@ a { color: inherit; text-decoration: none; }
   color: rgba(255, 255, 255, 0.7);
 }
 
-/* Responsive: pills stay scrollable on mobile — no wrapping */
+/* Responsive: slightly smaller pills on narrow screens; wrapping still applies */
 @media (max-width: 640px) {
-  .mf-label { display: none; } /* save horizontal space on small screens */
-  .mf-pill  { padding: 0.27rem 0.6rem; font-size: 0.72rem; }
-  .mf-logo  { width: 15px; height: 15px; }
+  .mf-pill { padding: 0.27rem 0.6rem; font-size: 0.72rem; }
+  .mf-logo { width: 15px; height: 15px; }
 }
