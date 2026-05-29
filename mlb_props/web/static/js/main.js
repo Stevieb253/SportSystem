@@ -46,10 +46,10 @@ function sortTable(tableId, colIndex) {
 
 // ── Unified filter state ──────────────────────────────────────────────────────
 // Holds the active filter value for each tab + dimension.
-// e.g. _filterState.hit.verdict = 'YES', _filterState.hr.team = 'LAD'
+// matchup: null | { away: 'ATL', home: 'CIN' }  — shared across both tabs.
 const _filterState = {
-  hit: { verdict: '', team: '', hand: '', slot: '' },
-  hr:  { verdict: '', team: '', hand: '', slot: '' },
+  hit: { verdict: '', team: '', hand: '', slot: '', matchup: null },
+  hr:  { verdict: '', team: '', hand: '', slot: '', matchup: null },
 };
 
 function toggleFilter(tab, dimension, val, btn) {
@@ -65,24 +65,36 @@ function toggleFilter(tab, dimension, val, btn) {
   applyFilters(tab);
 }
 
+// Called by the team <select> onchange — clears matchup when a specific team is chosen
+function onTeamDropdownChange(tab) {
+  var teamEl = document.getElementById(tab + '-team');
+  if (teamEl && teamEl.value !== '') {
+    // Selecting a specific team clears the shared matchup filter on both tabs
+    _filterState.hit.matchup = null;
+    _filterState.hr.matchup  = null;
+    _setActiveMatchupPill('hit', null);
+    _setActiveMatchupPill('hr',  null);
+  }
+  applyFilters(tab);
+}
+
 function applyFilters(tab) {
-  const state = _filterState[tab];
-  const search = (document.getElementById(tab + '-search')?.value || '').toLowerCase();
-  const teamSel = document.getElementById(tab + '-team')?.value || '';
+  var state   = _filterState[tab];
+  var search  = (document.getElementById(tab + '-search')?.value || '').toLowerCase();
+  // When a matchup is active ignore the team dropdown — matchup takes priority
+  var teamSel = state.matchup ? '' : (document.getElementById(tab + '-team')?.value || '');
 
   if (tab === 'hit') {
-    const table = document.getElementById('hit-table');
+    var table = document.getElementById('hit-table');
     if (!table) return;
-    table.querySelectorAll('tbody tr').forEach(row => {
-      const show = _rowMatches(row, state, search, teamSel, 'table');
-      row.style.display = show ? '' : 'none';
+    table.querySelectorAll('tbody tr').forEach(function(row) {
+      row.style.display = _rowMatches(row, state, search, teamSel, 'table') ? '' : 'none';
     });
   } else {
-    const grid = document.getElementById('hr-grid');
+    var grid = document.getElementById('hr-grid');
     if (!grid) return;
-    grid.querySelectorAll('.hr-card').forEach(card => {
-      const show = _rowMatches(card, state, search, teamSel, 'card');
-      card.style.display = show ? '' : 'none';
+    grid.querySelectorAll('.hr-card').forEach(function(card) {
+      card.style.display = _rowMatches(card, state, search, teamSel, 'card') ? '' : 'none';
     });
   }
 }
@@ -91,16 +103,22 @@ function _rowMatches(el, state, search, teamSel, type) {
   // Verdict
   if (state.verdict && el.dataset.verdict !== state.verdict) return false;
 
-  // Team (from select or state)
-  const team = teamSel || state.team;
-  if (team && el.dataset.team !== team) return false;
+  // Matchup filter: both teams in the game must match
+  if (state.matchup) {
+    var gAway = el.dataset.gameAway || '';
+    var gHome = el.dataset.gameHome || '';
+    if (gAway !== state.matchup.away || gHome !== state.matchup.home) return false;
+  } else if (teamSel) {
+    // Fall back to single-team dropdown
+    if (el.dataset.team !== teamSel) return false;
+  }
 
   // Hand
   if (state.hand && el.dataset.hand !== state.hand) return false;
 
   // Lineup slot
   if (state.slot) {
-    const pos = parseInt(el.dataset.pos || '0', 10);
+    var pos = parseInt(el.dataset.pos || '0', 10);
     if (state.slot === 'top' && (pos < 1 || pos > 3)) return false;
     if (state.slot === 'mid' && (pos < 4 || pos > 6)) return false;
     if (state.slot === 'bot' && (pos < 7 || pos > 9)) return false;
@@ -108,13 +126,126 @@ function _rowMatches(el, state, search, teamSel, type) {
 
   // Text search (player name)
   if (search) {
-    const nameEl = type === 'table'
+    var nameEl = type === 'table'
       ? el.cells[0]?.textContent
       : el.querySelector('.hr-player-name')?.textContent;
     if (!(nameEl || '').toLowerCase().includes(search)) return false;
   }
 
   return true;
+}
+
+// ── Matchup filter pills ──────────────────────────────────────────────────────
+// Reads window.MLB_GAMES (injected by the template) and builds a scrollable
+// pill row for each prop tab.  Matchup state is shared across hit + hr tabs.
+
+function selectMatchupPill(btn, tab, matchup) {
+  // Sync matchup across both tabs so switching tabs preserves the selection
+  _filterState.hit.matchup = matchup;
+  _filterState.hr.matchup  = matchup;
+
+  // If a matchup is selected, reset team dropdowns to "All Teams"
+  if (matchup) {
+    ['hit', 'hr'].forEach(function(t) {
+      var el = document.getElementById(t + '-team');
+      if (el) el.value = '';
+    });
+  }
+
+  // Highlight the pill in both bars so whichever tab you're on looks correct
+  _setActiveMatchupPill('hit', matchup);
+  _setActiveMatchupPill('hr',  matchup);
+
+  // Re-filter the tab that was clicked
+  applyFilters(tab);
+}
+
+function _setActiveMatchupPill(tab, matchup) {
+  var bar = document.getElementById(tab + '-matchup-bar');
+  if (!bar) return;
+  bar.querySelectorAll('.mf-pill').forEach(function(p) {
+    p.classList.remove('mf-pill-active');
+  });
+  if (!matchup) {
+    var allPill = bar.querySelector('.mf-pill-all');
+    if (allPill) allPill.classList.add('mf-pill-active');
+  } else {
+    bar.querySelectorAll('.mf-pill').forEach(function(p) {
+      if (p.dataset.away === matchup.away && p.dataset.home === matchup.home) {
+        p.classList.add('mf-pill-active');
+      }
+    });
+  }
+}
+
+function _buildMatchupPills(tab) {
+  var bar = document.getElementById(tab + '-matchup-bar');
+  if (!bar) return;
+
+  var games = (window.MLB_GAMES || []).filter(function(g) {
+    return g.away_abbr && g.home_abbr;
+  });
+
+  // Hide the bar entirely if there are no games (e.g. lineup data not yet loaded)
+  if (!games.length) {
+    bar.style.display = 'none';
+    return;
+  }
+
+  // Sort earliest game first
+  games.sort(function(a, b) {
+    var ta = a.game_time || '';
+    var tb = b.game_time || '';
+    return ta < tb ? -1 : ta > tb ? 1 : 0;
+  });
+
+  var html = '<span class="mf-label">Filter by matchup</span><div class="mf-pills">';
+
+  // "All Games" pill — active by default
+  html += '<button class="mf-pill mf-pill-all mf-pill-active"'
+        + ' data-away="" data-home=""'
+        + ' onclick="selectMatchupPill(this,\'' + tab + '\',null)">All Games</button>';
+
+  games.forEach(function(g) {
+    var away     = g.away_abbr;
+    var home     = g.home_abbr;
+    var awayLogo = g.away_logo || '';
+    var homeLogo = g.home_logo || '';
+
+    // Parse local game time → "7:10 PM"
+    var timeStr = '';
+    if (g.game_time) {
+      try {
+        var d = new Date(g.game_time);
+        if (!isNaN(d.getTime())) {
+          timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        }
+      } catch (_) {}
+    }
+
+    // Encode matchup object for inline onclick (avoids quoting issues)
+    var matchupJson = '{away:\'' + away + '\',home:\'' + home + '\'}';
+
+    html += '<button class="mf-pill"'
+          + ' data-away="' + away + '" data-home="' + home + '"'
+          + ' onclick="selectMatchupPill(this,\'' + tab + '\',' + matchupJson + ')">';
+    if (awayLogo) {
+      html += '<img class="mf-logo" src="' + awayLogo + '" alt="' + away + '"'
+            + ' onerror="this.style.display=\'none\'">';
+    }
+    html += '<span class="mf-abbr">' + away + '</span>';
+    html += '<span class="mf-sep">@</span>';
+    if (homeLogo) {
+      html += '<img class="mf-logo" src="' + homeLogo + '" alt="' + home + '"'
+            + ' onerror="this.style.display=\'none\'">';
+    }
+    html += '<span class="mf-abbr">' + home + '</span>';
+    if (timeStr) html += '<span class="mf-time">' + timeStr + '</span>';
+    html += '</button>';
+  });
+
+  html += '</div>';
+  bar.innerHTML = html;
 }
 
 // ── Populate team dropdowns from row data ─────────────────────────────────────
@@ -138,6 +269,10 @@ function _populateTeamDropdown(tab, selector) {
 // Run once DOM is ready (script is at bottom of body so DOM is built)
 _populateTeamDropdown('hit', '#hit-table tbody tr');
 _populateTeamDropdown('hr',  '#hr-grid .hr-card');
+
+// Build matchup pill bars from page-embedded game data
+_buildMatchupPills('hit');
+_buildMatchupPills('hr');
 
 // ── Legacy wrappers (kept so any inline onclick still works) ──────────────────
 function filterTable(tableId, verdict, btn) {
