@@ -138,17 +138,42 @@
   </h2>
 
   {% set edges = game_ctx.get('edges', {}) %}
-  {% set pitch_edge = edges.get('starting_pitching_edge', 'neutral') %}
-  <div class="gd-edge-banner
-    {% if pitch_edge == 'home' %}gd-edge-home
-    {% elif pitch_edge == 'away' %}gd-edge-away
-    {% elif pitch_edge in ('neutral','mixed') %}gd-edge-neutral
-    {% endif %}">
-    Starting Pitcher Edge:
-    {% if pitch_edge == 'home' %}{{ home_abbr }} (Home)
-    {% elif pitch_edge == 'away' %}{{ away_abbr }} (Away)
-    {% elif pitch_edge == 'mixed' %}Mixed — close matchup
-    {% else %}Even
+  {% set pitch_edge    = edges.get('starting_pitching_edge', 'neutral') %}
+  {% set pitch_score   = edges.get('pitching_edge_score', 0) %}
+  {% set pitch_n       = edges.get('pitching_metrics_used', 0) %}
+  {% set pitch_reasons = edges.get('pitching_edge_reasons', []) %}
+
+  {% if pitch_edge == 'home' %}{% set edge_cls = 'gd-edge-home' %}
+  {% elif pitch_edge == 'away' %}{% set edge_cls = 'gd-edge-away' %}
+  {% else %}{% set edge_cls = 'gd-edge-neutral' %}{% endif %}
+
+  <div class="gd-edge-banner {{ edge_cls }}">
+    <div class="gd-edge-top">
+      <span class="gd-edge-label">Starting Pitcher Edge:</span>
+      <span class="gd-edge-team">
+        {% if pitch_edge == 'home' %}{{ home_abbr }} (Home)
+        {% elif pitch_edge == 'away' %}{{ away_abbr }} (Away)
+        {% elif pitch_edge == 'mixed' %}Insufficient data
+        {% else %}Even matchup
+        {% endif %}
+      </span>
+      {% if pitch_score != 0 and pitch_n > 0 %}
+      <span class="gd-edge-score">Score {{ "{:+.1f}".format(pitch_score) }} · {{ pitch_n }} metric{{ 's' if pitch_n != 1 }}</span>
+      {% endif %}
+    </div>
+
+    {% if pitch_reasons %}
+    <ul class="gd-edge-reasons">
+      {% for reason in pitch_reasons %}
+      <li class="gd-edge-reason">&#10003; {{ reason }}</li>
+      {% endfor %}
+    </ul>
+    {% elif pitch_edge == 'neutral' and pitch_n == 0 and edges.get('pitching_metrics_used', -1) == 0 %}
+    <p class="gd-edge-desc">Both pitchers appear evenly matched across all available metrics.</p>
+    {% elif pitch_edge == 'mixed' %}
+    <p class="gd-edge-desc">Not enough data to compare these pitchers.</p>
+    {% elif pitch_edge == 'neutral' %}
+    <p class="gd-edge-desc">Metrics are close — no meaningful edge in either direction.</p>
     {% endif %}
   </div>
 

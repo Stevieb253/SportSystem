@@ -220,14 +220,15 @@ def _compute_edges(
     data_availability: dict,
 ) -> dict:
     """Compute edge labels from structured data."""
-    pitch_edge, pitch_score, pitch_metrics = _pitching_edge(hp, ap)
+    pitch_edge, pitch_score, pitch_metrics, pitch_reasons = _pitching_edge(hp, ap)
     return {
-        "starting_pitching_edge":      pitch_edge,
-        "pitching_edge_score":         pitch_score,    # composite score (+ = home)
-        "pitching_metrics_used":       pitch_metrics,  # count of metrics that voted
-        "offensive_projection_edge":   _offensive_edge(home_off, away_off),
-        "weather_park_edge":           _weather_park_edge(weather_ctx, park_ctx),
-        "confidence_tier":             _confidence_tier(data_availability),
+        "starting_pitching_edge":    pitch_edge,
+        "pitching_edge_score":       pitch_score,    # composite score (+ = home edge)
+        "pitching_metrics_used":     pitch_metrics,  # metrics that cast a directional vote
+        "pitching_edge_reasons":     pitch_reasons,  # user-facing strings for the UI
+        "offensive_projection_edge": _offensive_edge(home_off, away_off),
+        "weather_park_edge":         _weather_park_edge(weather_ctx, park_ctx),
+        "confidence_tier":           _confidence_tier(data_availability),
     }
 
 
@@ -269,54 +270,69 @@ def _pitching_edge(hp: dict, ap: dict) -> str:
     has_ap = bool(ap.get("name") and ap.get("name") != "TBD")
 
     if not has_hp and not has_ap:
-        return "neutral", 0.0, 0
+        return "neutral", 0.0, 0, []
     if not has_hp or not has_ap:
-        return "mixed", 0.0, 0
+        return "mixed", 0.0, 0, []
 
     score = 0.0
-    metrics_used   = 0   # metrics that exceeded the noise threshold (cast a vote)
-    stats_seen     = 0   # metrics where both pitchers had non-None values
+    metrics_used = 0   # metrics that exceeded the noise threshold (cast a vote)
+    stats_seen   = 0   # metrics where both pitchers had non-None values
+    # Each vote: (home_pitcher_won: bool, user_label: str)
+    _votes: list[tuple[bool, str]] = []
 
-    def _vote(hp_val, ap_val, weight: float, lower_is_better: bool, min_gap: float) -> None:
+    def _vote(
+        hp_val, ap_val,
+        weight: float,
+        lower_is_better: bool,
+        min_gap: float,
+        user_label: str,
+    ) -> None:
         """Cast a weighted directional vote if the gap exceeds the noise floor."""
         nonlocal score, metrics_used, stats_seen
         if hp_val is None or ap_val is None:
             return
-        stats_seen += 1  # both pitchers have this stat
-        # diff > 0 means home pitcher is better for this metric
+        stats_seen += 1
         diff = (ap_val - hp_val) if lower_is_better else (hp_val - ap_val)
         if abs(diff) < min_gap:
-            return  # gap is within noise — no vote
-        score += weight if diff > 0 else -weight
+            return
+        home_wins = diff > 0
+        score += weight if home_wins else -weight
         metrics_used += 1
+        _votes.append((home_wins, user_label))
 
     # Tier 1 — Statcast expected (highest predictive value; no defense/luck)
-    _vote(hp.get("xera"),          ap.get("xera"),          3.0, True,  0.20)
-    _vote(hp.get("xwoba_allowed"), ap.get("xwoba_allowed"), 2.5, True,  0.010)
+    _vote(hp.get("xera"),          ap.get("xera"),          3.0, True,  0.20,  "Better expected ERA (xERA)")
+    _vote(hp.get("xwoba_allowed"), ap.get("xwoba_allowed"), 2.5, True,  0.010, "Better xwOBA allowed")
 
     # Tier 2 — Fielding-independent and contact quality
-    _vote(hp.get("fip"),                  ap.get("fip"),                  2.0, True,  0.25)
-    _vote(hp.get("k_pct"),                ap.get("k_pct"),                1.5, False, 0.020)
-    _vote(hp.get("hard_hit_pct_allowed"), ap.get("hard_hit_pct_allowed"), 1.5, True,  0.030)
-    _vote(hp.get("barrel_pct_allowed"),   ap.get("barrel_pct_allowed"),   1.5, True,  0.010)
+    _vote(hp.get("fip"),                  ap.get("fip"),                  2.0, True,  0.25,  "Better FIP")
+    _vote(hp.get("k_pct"),                ap.get("k_pct"),                1.5, False, 0.020, "Higher strikeout rate")
+    _vote(hp.get("hard_hit_pct_allowed"), ap.get("hard_hit_pct_allowed"), 1.5, True,  0.030, "Lower hard-hit rate allowed")
+    _vote(hp.get("barrel_pct_allowed"),   ap.get("barrel_pct_allowed"),   1.5, True,  0.010, "Lower barrel rate allowed")
 
     # Tier 3 — Control and swing-and-miss
-    _vote(hp.get("bb_pct"),              ap.get("bb_pct"),              1.0, True,  0.015)
-    _vote(hp.get("whiff_pct_generated"), ap.get("whiff_pct_generated"), 1.0, False, 0.020)
+    _vote(hp.get("bb_pct"),              ap.get("bb_pct"),              1.0, True,  0.015, "Lower walk rate")
+    _vote(hp.get("whiff_pct_generated"), ap.get("whiff_pct_generated"), 1.0, False, 0.020, "Higher whiff rate")
 
     # Tier 4 — Traditional (BABIP/defense-influenced; weakest signal)
-    _vote(hp.get("whip"), ap.get("whip"), 0.5, True, 0.10)
+    _vote(hp.get("whip"), ap.get("whip"), 0.5, True, 0.10, "Better WHIP")
 
     if stats_seen == 0:
-        return "mixed", 0.0, 0  # no comparable stats for either pitcher
+        return "mixed", 0.0, 0, []
 
-    # stats_seen > 0 but metrics_used == 0: both pitchers' stats are within
-    # noise thresholds on every metric — they appear evenly matched.
+    # Build the reasons list: only the metrics that voted FOR the winning side.
+    # Contradicting signals are intentionally omitted to keep the display compact.
     if score >= 1.5:
-        return "home",    round(score, 2), metrics_used
-    if score <= -1.5:
-        return "away",    round(score, 2), metrics_used
-    return "neutral",     round(score, 2), metrics_used
+        label   = "home"
+        reasons = [lbl for (home_wins, lbl) in _votes if home_wins]
+    elif score <= -1.5:
+        label   = "away"
+        reasons = [lbl for (home_wins, lbl) in _votes if not home_wins]
+    else:
+        label   = "neutral"
+        reasons = []   # evenly matched — no single winner to explain
+
+    return label, round(score, 2), metrics_used, reasons
 
 
 def _offensive_edge(home_off: dict, away_off: dict) -> str:
