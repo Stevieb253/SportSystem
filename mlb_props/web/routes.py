@@ -144,6 +144,26 @@ def game_detail(game_pk: int):
         r for r in model.get("hr_probabilities", [])
         if _result_game_pk(r) == game_pk
     ]
+
+    # Build structured game context for server-side rendering of the new
+    # Team Form, Bullpen, and Park/Weather sections.  Cached through the
+    # normal pipeline so this does not incur extra API calls on repeat visits.
+    game_ctx: dict | None = None
+    if game is not None:
+        try:
+            from api import mlb_api as _mlb_api
+            park_factors_df = _pipeline.load_park_factors(int(today[:4]))
+            game_ctx = game_context_service.build_game_context(
+                game            = game,
+                hit_results     = hit_results,
+                hr_results      = hr_results,
+                park_factors_df = park_factors_df,
+                mlb_api         = _mlb_api,
+                date_str        = today,
+            )
+        except Exception as exc:
+            logger.warning("game_detail: game_ctx build failed: %s", exc)
+
     return render_template(
         "game.html",
         game=game,
@@ -151,6 +171,7 @@ def game_detail(game_pk: int):
         hr_results=hr_results,
         selected_date=today,
         debug=config.DEBUG,
+        game_ctx=game_ctx,
     )
 
 

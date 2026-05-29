@@ -587,6 +587,45 @@ def get_season_leaders(stat_category: str, season: int, limit: int = 25) -> list
     return results
 
 
+def get_team_stats(team_id: int, season: int, group: str = "pitching") -> dict:
+    """Fetch aggregate team season stats from the MLB Stats API.
+
+    Useful for team ERA, saves, blownSaves, holds etc. (group='pitching')
+    or team batting lines (group='hitting').
+
+    Args:
+        team_id: MLBAM team ID.
+        season:  Season year.
+        group:   'pitching' or 'hitting'.
+
+    Returns:
+        Flat dict of stats (keys match MLB API stat names), empty dict if unavailable.
+    """
+    if not team_id:
+        return {}
+    cache_key = f"mlb_team_stats_{team_id}_{group}_{season}"
+    if _cache:
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    url = f"{config.MLB_API_BASE_URL}/teams/{team_id}/stats"
+    params = {"stats": "season", "group": group, "season": season}
+    data = _get(url, params)
+
+    flat: dict = {}
+    try:
+        for stat_group in data.get("stats", []):
+            for split in stat_group.get("splits", []):
+                flat.update(split.get("stat", {}))
+    except Exception as exc:
+        logger.warning("get_team_stats failed (team=%s group=%s): %s", team_id, group, exc)
+
+    if _cache and flat:
+        _cache.set(cache_key, flat)
+    return flat
+
+
 def get_standings(season: int) -> dict:
     """Fetch league standings for a season.
 
@@ -603,7 +642,8 @@ def get_standings(season: int) -> dict:
             return cached
 
     url = f"{config.MLB_API_BASE_URL}/standings"
-    params = {"leagueId": "103,104", "season": season}
+    # standingsTypes=regularSeason ensures splitRecords (lastTen etc.) are included
+    params = {"leagueId": "103,104", "season": season, "standingsTypes": "regularSeason"}
     data = _get(url, params)
     if _cache and data:
         _cache.set(cache_key, data)

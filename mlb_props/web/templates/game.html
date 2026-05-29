@@ -62,9 +62,171 @@
   </div>
 </div>
 
-<!-- ── Weather ── -->
+<!-- ════════════════════════════════════════════════
+     TEAM FORM
+════════════════════════════════════════════════ -->
+{% if game_ctx %}
+{% set home_form = game_ctx.get('team_form', {}).get('home', {}) %}
+{% set away_form = game_ctx.get('team_form', {}).get('away', {}) %}
+{% if home_form.get('available') or away_form.get('available') %}
 <div class="section-card">
-  <h2 class="section-title">Weather</h2>
+  <h2 class="section-title">Team Form</h2>
+  <div class="gd-form-grid">
+
+    {% for form, abbr, side_label in [
+        (away_form, away_abbr, 'Away'),
+        (home_form, home_abbr, 'Home')
+    ] %}
+    <div class="gd-form-col">
+      <div class="gd-form-header">
+        <img src="{{ abbr | team_logo }}" class="gd-form-logo" alt="{{ abbr }}" onerror="this.style.display='none'" />
+        <div>
+          <span class="gd-form-abbr">{{ abbr }}</span>
+          <span class="gd-form-side">{{ side_label }}</span>
+        </div>
+        {% if form.get('streak') %}
+          {% set stk = form.streak %}
+          {% set stk_cls = 'gd-streak-w' if stk.startswith('W') else 'gd-streak-l' %}
+          <span class="gd-streak {{ stk_cls }}">{{ stk }}</span>
+        {% endif %}
+      </div>
+      {% if form.get('available') %}
+      <div class="gd-form-record">
+        {{ form.wins }}-{{ form.losses }}
+        {% if form.get('win_pct') %}
+        <span class="gd-form-pct">.{{ "%.3f"|format(form.win_pct|float) | replace('0.', '') | replace('.', '') }}</span>
+        {% endif %}
+      </div>
+      <div class="gd-form-stats">
+        {% if form.get('last_ten_wins') is not none %}
+        <div class="gd-form-stat">
+          <span class="gd-form-stat-lbl">Last 10</span>
+          <span class="gd-form-stat-val mono">{{ form.last_ten_wins }}-{{ form.last_ten_losses }}</span>
+        </div>
+        {% endif %}
+        {% if form.get('home_wins') is not none %}
+        <div class="gd-form-stat">
+          <span class="gd-form-stat-lbl">Home</span>
+          <span class="gd-form-stat-val mono">{{ form.home_wins }}-{{ form.home_losses }}</span>
+        </div>
+        {% endif %}
+        {% if form.get('away_wins') is not none %}
+        <div class="gd-form-stat">
+          <span class="gd-form-stat-lbl">Away</span>
+          <span class="gd-form-stat-val mono">{{ form.away_wins }}-{{ form.away_losses }}</span>
+        </div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="gd-form-na">Record unavailable</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+  </div>
+</div>
+{% endif %}
+
+<!-- ════════════════════════════════════════════════
+     BULLPEN & PITCHING CONTEXT
+════════════════════════════════════════════════ -->
+{% set home_bp = game_ctx.get('bullpen', {}).get('home', {}) %}
+{% set away_bp = game_ctx.get('bullpen', {}).get('away', {}) %}
+{% if home_bp.get('available') or away_bp.get('available') %}
+<div class="section-card">
+  <h2 class="section-title">Bullpen &amp; Pitching Context
+    <span class="section-subtitle">Team season totals — ERA, saves &amp; blown saves</span>
+  </h2>
+
+  {% set edges = game_ctx.get('edges', {}) %}
+  {% set pitch_edge = edges.get('starting_pitching_edge', 'neutral') %}
+  <div class="gd-edge-banner
+    {% if pitch_edge == 'home' %}gd-edge-home
+    {% elif pitch_edge == 'away' %}gd-edge-away
+    {% elif pitch_edge in ('neutral','mixed') %}gd-edge-neutral
+    {% endif %}">
+    Starting Pitcher Edge:
+    {% if pitch_edge == 'home' %}{{ home_abbr }} (Home)
+    {% elif pitch_edge == 'away' %}{{ away_abbr }} (Away)
+    {% elif pitch_edge == 'mixed' %}Mixed — close matchup
+    {% else %}Even
+    {% endif %}
+  </div>
+
+  <div class="gd-bullpen-grid">
+    {% for bp, abbr in [(away_bp, away_abbr), (home_bp, home_abbr)] %}
+    <div class="gd-bullpen-col">
+      <div class="gd-bullpen-team">
+        <img src="{{ abbr | team_logo }}" class="gd-form-logo" alt="{{ abbr }}" onerror="this.style.display='none'" />
+        <span class="gd-form-abbr">{{ abbr }}</span>
+      </div>
+      {% if bp.get('available') %}
+      <div class="gd-bullpen-stats">
+        {% if bp.get('era') is not none %}
+        <div class="gd-bp-stat"><span class="gd-bp-lbl">Team ERA</span><span class="gd-bp-val mono">{{ "%.2f"|format(bp.era) }}</span></div>
+        {% endif %}
+        {% if bp.get('whip') is not none %}
+        <div class="gd-bp-stat"><span class="gd-bp-lbl">Team WHIP</span><span class="gd-bp-val mono">{{ "%.2f"|format(bp.whip) }}</span></div>
+        {% endif %}
+        {% if bp.get('saves') is not none %}
+        <div class="gd-bp-stat"><span class="gd-bp-lbl">Saves</span><span class="gd-bp-val mono">{{ bp.saves }}</span></div>
+        {% endif %}
+        {% if bp.get('blown_saves') is not none %}
+        <div class="gd-bp-stat"><span class="gd-bp-lbl">Blown Saves</span><span class="gd-bp-val mono">{{ bp.blown_saves }}</span></div>
+        {% endif %}
+        {% if bp.get('save_pct') is not none %}
+        <div class="gd-bp-stat"><span class="gd-bp-lbl">Save %</span><span class="gd-bp-val mono">{{ "%.0f"|format(bp.save_pct * 100) }}%</span></div>
+        {% endif %}
+        {% if bp.get('holds') is not none %}
+        <div class="gd-bp-stat"><span class="gd-bp-lbl">Holds</span><span class="gd-bp-val mono">{{ bp.holds }}</span></div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="gd-form-na">Data unavailable</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endif %}{# end if game_ctx #}
+
+<!-- ════════════════════════════════════════════════
+     WEATHER & PARK CONTEXT
+════════════════════════════════════════════════ -->
+<div class="section-card">
+  <h2 class="section-title">Weather &amp; Park Context</h2>
+
+  {# ── Park Profile (from game_ctx if available, else fall back to game dict) ── #}
+  {% if game_ctx and game_ctx.get('park', {}).get('available') %}
+  {% set park = game_ctx.get('park', {}) %}
+  {% set park_profile = park.get('park_profile', 'neutral') %}
+  <div class="gd-park-row">
+    <div class="gd-park-profile">
+      <span class="gd-park-name">{{ park.get('venue') or v.get('name','') }}</span>
+      {% if park_profile == 'hitter-friendly' %}
+      <span class="gd-park-badge gd-park-hitter">🏟 Hitter Friendly</span>
+      {% elif park_profile == 'pitcher-friendly' %}
+      <span class="gd-park-badge gd-park-pitcher">🏟 Pitcher Friendly</span>
+      {% else %}
+      <span class="gd-park-badge gd-park-neutral">🏟 Neutral Park</span>
+      {% endif %}
+      {% if park.get('is_dome') %}<span class="gd-park-badge gd-park-dome">Dome</span>{% endif %}
+      {% if park.get('is_retractable') %}<span class="gd-park-badge gd-park-retractable">Retractable Roof</span>{% endif %}
+    </div>
+    <div class="gd-park-factors">
+      {% if park.get('run_factor') %}<div class="gd-pf-item"><span class="gd-pf-lbl">Run Factor</span><span class="gd-pf-val mono {% if park.run_factor >= 108 %}gd-pf-hi{% elif park.run_factor <= 93 %}gd-pf-lo{% endif %}">{{ park.run_factor|round|int }}</span></div>{% endif %}
+      {% if park.get('hr_factor')  %}<div class="gd-pf-item"><span class="gd-pf-lbl">HR Factor</span><span class="gd-pf-val mono {% if park.hr_factor >= 108 %}gd-pf-hi{% elif park.hr_factor <= 93 %}gd-pf-lo{% endif %}">{{ park.hr_factor|round|int }}</span></div>{% endif %}
+      {% if park.get('hit_factor') %}<div class="gd-pf-item"><span class="gd-pf-lbl">Hit Factor</span><span class="gd-pf-val mono {% if park.hit_factor >= 108 %}gd-pf-hi{% elif park.hit_factor <= 93 %}gd-pf-lo{% endif %}">{{ park.hit_factor|round|int }}</span></div>{% endif %}
+      <span class="gd-pf-avg">100 = League Average</span>
+    </div>
+    {% if park.get('tendency_notes') %}
+    <p class="gd-park-notes">{{ park.tendency_notes }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ── Weather ── #}
   {% if w.get('is_dome') %}
   <p class="dome-note">Indoor stadium — weather has no impact on the game.</p>
   {% else %}
@@ -95,11 +257,11 @@
   {% endif %}
 </div>
 
-<!-- ── AI Game Breakdown ── -->
+<!-- ── Quick Read (AI Game Breakdown) ── -->
 <div class="section-card" id="game-breakdown-card">
   <div class="gb-header">
     <h2 class="section-title gb-title">
-      <span class="gb-icon">&#x2736;</span> AI Game Breakdown
+      <span class="gb-icon">&#x2736;</span> Quick Read
     </h2>
     <button class="btn-game-breakdown" id="btn-game-breakdown"
             data-game-pk="{{ gdict.get('game_pk', 0) }}"
@@ -107,7 +269,7 @@
       Generate Analysis
     </button>
   </div>
-  <p class="gb-disclaimer">AI-generated contextual analysis using structured MLB data. For informational purposes only — not betting advice.</p>
+  <p class="gb-disclaimer">AI-generated matchup narrative using the structured data above. Informational only — not betting advice.</p>
   <div class="gb-body" id="gb-body" hidden>
     <!-- filled by JS — all stats shown are from structured backend data, not parsed from AI prose -->
   </div>
@@ -115,7 +277,7 @@
 
 <!-- ── Pitching matchup ── -->
 <div class="section-card">
-  <h2 class="section-title">Pitching Matchup</h2>
+  <h2 class="section-title">Starting Pitchers</h2>
   <div class="pitching-matchup-grid">
     {% for side, pitcher, team_abbr_p, label in [('away', ap, away_abbr, away.get('abbreviation','')), ('home', hp, home_abbr, home.get('abbreviation',''))] %}
     <div class="pitcher-detail-card">

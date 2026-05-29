@@ -66,21 +66,31 @@ def build_game_context(
     home_hr  = [r for r in hr_results  if _player_team(r) == home_abbr]
     away_hr  = [r for r in hr_results  if _player_team(r) == away_abbr]
 
-    # ── Standings ──────────────────────────────────────────────────────────────
+    # ── Standings + team pitching ──────────────────────────────────────────────
     standings = {}
+    home_pitching_stats: dict = {}
+    away_pitching_stats: dict = {}
     if mlb_api and date_str:
+        season = int(date_str[:4])
         try:
-            season = int(date_str[:4])
             raw = mlb_api.get_standings(season) or {}
             standings = _parse_standings(raw)
         except Exception as exc:
             logger.warning("Standings fetch failed in game_context_service: %s", exc)
+        home_pitching_stats = _fetch_team_pitching(home_id, mlb_api, season)
+        away_pitching_stats = _fetch_team_pitching(away_id, mlb_api, season)
 
     home_record = standings.get(home_id) or standings.get(str(home_id)) or {}
     away_record = standings.get(away_id) or standings.get(str(away_id)) or {}
 
     # ── Park factors ───────────────────────────────────────────────────────────
     park_ctx = _get_park_ctx(v.get("name", ""), park_factors_df, home_abbr)
+
+    # ── Team form & bullpen ────────────────────────────────────────────────────
+    home_form    = _team_form(home_record)
+    away_form    = _team_form(away_record)
+    home_bullpen = _bullpen_ctx(home_pitching_stats)
+    away_bullpen = _bullpen_ctx(away_pitching_stats)
 
     # ── Aggregate offensive projections ───────────────────────────────────────
     home_offense = _aggregate_offense(home_hit, home_hr)
@@ -111,6 +121,7 @@ def build_game_context(
         "home_lineup":  len(home_hit) > 0,
         "away_lineup":  len(away_hit) > 0,
         "pitchers":     bool(hp.get("name") or ap.get("name")),
+        "team_pitching": bool(home_bullpen.get("available") or away_bullpen.get("available")),
     }
 
     # ── Edges (computed after all data is ready) ───────────────────────────────
@@ -164,6 +175,9 @@ def build_game_context(
 
         "weather": weather_ctx,
         "park":    park_ctx,
+
+        "team_form": {"home": home_form, "away": away_form},
+        "bullpen":   {"home": home_bullpen, "away": away_bullpen},
 
         "data_availability": data_availability,
 
@@ -475,17 +489,111 @@ def _parse_standings(raw: dict) -> dict:
             ar  = tr.get("awayRecord", {})
             wins   = tr.get("wins", 0)
             losses = tr.get("losses", 0)
+
+            # Last-ten games split (from splitRecords when standingsTypes=regularSeason)
+            l10w: int | None = None
+            l10l: int | None = None
+            for sr in tr.get("records", {}).get("splitRecords", []):
+                if sr.get("type") == "lastTen":
+                    l10w = sr.get("wins")
+                    l10l = sr.get("losses")
+                    break
+
             out[team_id] = {
-                "wins":        wins,
-                "losses":      losses,
-                "win_pct":     tr.get("winningPercentage"),
-                "streak":      streak_code,
-                "home_wins":   hr.get("wins"),
-                "home_losses": hr.get("losses"),
-                "away_wins":   ar.get("wins"),
-                "away_losses": ar.get("losses"),
+                "wins":           wins,
+                "losses":         losses,
+                "win_pct":        tr.get("winningPercentage"),
+                "streak":         streak_code,
+                "home_wins":      hr.get("wins"),
+                "home_losses":    hr.get("losses"),
+                "away_wins":      ar.get("wins"),
+                "away_losses":    ar.get("losses"),
+                "last_ten_wins":  l10w,
+                "last_ten_losses": l10l,
             }
     return out
+
+
+def _fetch_team_pitching(team_id: int, mlb_api: Any, season: int) -> dict:
+    """Fetch team season pitching aggregate stats via mlb_api.get_team_stats()."""
+    if not mlb_api or not team_id:
+        return {}
+    try:
+        if hasattr(mlb_api, "get_team_stats"):
+            return mlb_api.get_team_stats(int(team_id), int(season), "pitching") or {}
+    except Exception as exc:
+        logger.warning("_fetch_team_pitching failed (team=%s): %s", team_id, exc)
+    return {}
+
+
+def _team_form(record: dict) -> dict:
+    """Build a structured team form dict from a parsed standings record."""
+    if not record:
+        return {"available": False}
+    l10w = record.get("last_ten_wins")
+    l10l = record.get("last_ten_losses")
+    return {
+        "available":      True,
+        "wins":           record.get("wins"),
+        "losses":         record.get("losses"),
+        "win_pct":        record.get("win_pct"),
+        "streak":         record.get("streak", ""),
+        "last_ten_wins":  l10w,
+        "last_ten_losses": l10l,
+        "home_wins":      record.get("home_wins"),
+        "home_losses":    record.get("home_losses"),
+        "away_wins":      record.get("away_wins"),
+        "away_losses":    record.get("away_losses"),
+    }
+
+
+def _bullpen_ctx(team_pitching: dict) -> dict:
+    """Build a bullpen/pitching context dict from team season pitching stats.
+
+    The MLB Stats API returns team-aggregate pitching numbers (not split by
+    starter vs reliever), but saves, blownSaves, and holds are reliever-specific.
+    ERA and WHIP are team-wide and used as a pitching-quality proxy.
+    """
+    if not team_pitching:
+        return {"available": False}
+
+    def _f(key: str):
+        v = team_pitching.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _i(key: str):
+        v = team_pitching.get(key)
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    era        = _f("era")
+    saves      = _i("saves")
+    blown      = _i("blownSaves")
+    holds      = _i("holds")
+    strikeouts = _i("strikeOuts")
+    whip       = _f("whip")
+
+    save_pct: float | None = None
+    if saves is not None and blown is not None:
+        opps = (saves or 0) + (blown or 0)
+        save_pct = round(saves / opps, 3) if opps > 0 else None
+
+    available = era is not None or saves is not None
+    return {
+        "available":   available,
+        "era":         round(era,  2) if era  is not None else None,
+        "whip":        round(whip, 2) if whip is not None else None,
+        "saves":       saves,
+        "blown_saves": blown,
+        "holds":       holds,
+        "save_pct":    save_pct,
+        "strikeouts":  strikeouts,
+    }
 
 
 def _pitcher_ctx(pitcher: dict, team_abbr: str) -> dict:
