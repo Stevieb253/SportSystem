@@ -157,18 +157,28 @@ def build_prop_context(
     venue_dict = game.get("venue") or {}
     venue_name = venue_dict.get("name", "")
 
+    # Extract home team abbreviation for park factor fallback lookup
+    teams_data = game.get("teams") or {}
+    home_team_abbr = (
+        (teams_data.get("home") or {})
+        .get("team", {})
+        .get("abbreviation", "")
+    )
+
+    # Build park context first — weather_ctx uses is_dome / is_retractable from it
+    park_ctx = _get_park_context(venue_name, park_factors_df, home_team_abbr)
+
     weather_ctx = {
         "temp_f":               _f(weather, "temp_f"),
         "wind_speed_mph":       _f(weather, "wind_speed_mph"),
         "wind_direction_deg":   _f(weather, "wind_direction_deg"),
         "wind_direction_label": _wind_label(_f(weather, "wind_direction_deg")),
-        "is_dome":              weather.get("is_dome", False),
+        "is_dome":              park_ctx.get("is_dome", weather.get("is_dome", False)),
+        "is_retractable":       park_ctx.get("is_retractable", False),
         "condition":            weather.get("condition_text"),
         "precipitation_mm":     _f(weather, "precipitation_mm"),
         "cloud_cover_pct":      weather.get("cloud_cover_pct"),
     }
-
-    park_ctx = _get_park_context(venue_name, park_factors_df)
 
     context_ctx = {
         "game_pk": game.get("game_pk"),
@@ -310,37 +320,73 @@ def _fetch_bvp_safe(bvp_api: Any, batter_id: int, pitcher_id: Any) -> dict:
         return empty
 
 
-def _get_park_context(venue_name: str, park_df: Any) -> dict:
-    """Extract park factors for a venue from the DataPipeline DataFrame."""
-    empty = {
-        "available":  False,
-        "name":       venue_name,
-        "hit_factor": None,
-        "hr_factor":  None,
-    }
+def _get_park_context(
+    venue_name: str,
+    park_df: Any,
+    home_team_abbr: str = "",
+) -> dict:
+    """Return rich park factor context for a venue.
 
-    if park_df is None:
-        return empty
-    if hasattr(park_df, "empty") and park_df.empty:
-        return empty
+    Uses the static park factor dataset as the primary source (always available),
+    with the live pybaseball DataFrame as an optional upgrade layer for run/hit/HR.
+    """
+    from data.static_park_factors import lookup_park_factors
 
-    try:
-        name_col = "Team" if "Team" in park_df.columns else park_df.columns[0]
-        first_word = venue_name.lower().split()[0] if venue_name else ""
-        if not first_word:
-            return empty
-        row = park_df[park_df[name_col].str.lower().str.contains(first_word, na=False)]
-        if row.empty:
-            return empty
-        r = row.iloc[0]
-        return {
-            "available":  True,
-            "name":       venue_name,
-            "hit_factor": float(r.get("1B", r.get("H", 100.0))),
-            "hr_factor":  float(r.get("HR", 100.0)),
-        }
-    except Exception:
-        return empty
+    ctx = lookup_park_factors(venue_name, home_team_abbr)
+
+    # Optional upgrade: merge live DataFrame factors on top of static baseline
+    if park_df is not None and not getattr(park_df, "empty", True):
+        try:
+            name_col  = "Team" if "Team" in park_df.columns else park_df.columns[0]
+            first_word = venue_name.lower().split()[0] if venue_name else ""
+            if first_word:
+                row = park_df[
+                    park_df[name_col].str.lower().str.contains(first_word, na=False)
+                ]
+                if not row.empty:
+                    r = row.iloc[0]
+                    hit_live = float(r.get("1B", r.get("H", 0)) or 0) or None
+                    hr_live  = float(r.get("HR", 0) or 0) or None
+                    if hit_live:
+                        ctx["hit_factor"] = hit_live
+                    if hr_live:
+                        ctx["hr_factor"] = hr_live
+                    ctx["source"] = "live+static"
+        except Exception:
+            pass  # static data already in ctx — no harm done
+
+    # Derive a human-readable park profile from run + HR factors
+    run_f = ctx.get("run_factor") or 100
+    hr_f  = ctx.get("hr_factor")  or 100
+    if run_f >= 105 or hr_f >= 108:
+        profile = "hitter-friendly"
+    elif run_f <= 97 or hr_f <= 96:
+        profile = "pitcher-friendly"
+    else:
+        profile = "neutral"
+
+    ctx["park_profile"] = profile
+    ctx["name"]         = venue_name or ctx.get("venue", "")
+
+    # Provide a graceful fallback note when exact data is unavailable
+    if ctx.get("source") == "neutral_fallback":
+        ctx["fallback_note"] = (
+            f"Detailed park factors unavailable. This stadium is generally considered "
+            f"{profile} based on configured park tendencies."
+        )
+    else:
+        ctx["fallback_note"] = None
+
+    logger.debug(
+        "prop park context: venue=%r  home_team=%r  source=%s  "
+        "run=%s  hr=%s  hit=%s  lhb_hr=%s  rhb_hr=%s  "
+        "dome=%s  retractable=%s  profile=%s",
+        venue_name, home_team_abbr, ctx.get("source"),
+        ctx.get("run_factor"), ctx.get("hr_factor"), ctx.get("hit_factor"),
+        ctx.get("lhb_hr_factor"), ctx.get("rhb_hr_factor"),
+        ctx.get("is_dome"), ctx.get("is_retractable"), profile,
+    )
+    return ctx
 
 
 def _wind_label(deg: float | None) -> str | None:

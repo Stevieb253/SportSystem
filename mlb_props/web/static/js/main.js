@@ -367,7 +367,7 @@ function searchTable(tableId, query) {
     _renderSummaryTab(data, propType, prob, pct, exp);
     _renderMatchupTab(data);
     _renderArsenalTab(data);
-    _renderWeatherTab(data);
+    _renderWeatherTab(data, propType);
     _renderOddsTab(data, propType, prob);
 
     _resetToSummaryTab();
@@ -393,11 +393,11 @@ function searchTable(tableId, query) {
     // AI explanation — always render a consistent card
     const cleanText = _cleanExplanationText(exp.available ? exp.explanation : null);
     html += '<div class="ed-ai-card">';
-    html += '<div class="ed-ai-card-header"><span class="ed-ai-icon">&#x2736;</span><span>AI Analysis</span></div>';
+    html += '<div class="ed-ai-card-header"><span class="ed-ai-icon">&#x2736;</span><span>Matchup Analysis</span></div>';
     if (cleanText) {
       html += '<p class="ed-explanation">' + _esc(cleanText) + '</p>';
     } else {
-      html += '<p class="ed-explanation-unavailable">AI explanation is unavailable right now, but the matchup data below is still available.</p>';
+      html += '<p class="ed-explanation-unavailable">Analysis is temporarily unavailable. The matchup data below is still current.</p>';
     }
     html += '</div>';
 
@@ -553,60 +553,107 @@ function searchTable(tableId, query) {
   }
 
   // ── Weather & Park tab ────────────────────────────────────────────────────
-  function _renderWeatherTab(data) {
-    const pane    = drawer.querySelector('.ed-pane[data-pane="weather"]');
-    const ctx     = data.context || {};
-    const weather = ctx.weather  || {};
-    const park    = ctx.park     || {};
-    let html = '';
+  function _renderWeatherTab(data, propType) {
+    var pane    = drawer.querySelector('.ed-pane[data-pane="weather"]');
+    var ctx     = data.context || {};
+    var weather = ctx.weather  || {};
+    var park    = ctx.park     || {};
+    var isHR    = propType === 'hr';
+    var html    = '';
 
-    // Stadium / park factors
-    html += '<h3 class="ed-section-title" style="margin-top:0">Stadium</h3>';
-    const parkName = park.name || ctx.venue || '—';
-    const hitF     = park.hit_factor;
-    const hrF      = park.hr_factor;
-    const hitCls   = hitF >= 105 ? 'hi' : hitF <= 95 ? 'lo' : '';
-    html += '<div class="ed-park-block">';
-    html += '<div>';
-    html += '<div class="ed-park-name">' + _esc(parkName) + '</div>';
-    if (park.available && hitF) {
-      html += '<div class="ed-park-sub">Hit factor: ' + Math.round(hitF) + ' · HR factor: ' + (hrF ? Math.round(hrF) : '—') + ' &nbsp;(100&nbsp;=&nbsp;avg)</div>';
-    } else {
-      html += '<div class="ed-park-sub">Park factor data unavailable</div>';
-    }
-    html += '</div>';
-    if (park.available && hitF) {
-      html += '<div class="ed-park-factor ' + hitCls + '">' + Math.round(hitF) + '</div>';
-    }
-    html += '</div>';
+    // ── SECTION 1: Stadium ──────────────────────────────────────────────────
+    var parkName = park.name || ctx.venue || '—';
+    var profile  = park.park_profile || 'neutral';
+    var profBadgeCls = profile === 'hitter-friendly' ? 'wp-badge-hitter'
+                     : profile === 'pitcher-friendly' ? 'wp-badge-pitcher'
+                     : 'wp-badge-neutral';
+    var profLabel    = profile === 'hitter-friendly' ? '🏟 Hitter Friendly'
+                     : profile === 'pitcher-friendly' ? '🏟 Pitcher Friendly'
+                     : '🏟 Neutral Park';
 
-    // Weather conditions
-    html += '<h3 class="ed-section-title">Conditions</h3>';
+    html += '<div class="wp-section wp-section-stadium">';
+    html += '<div class="wp-stadium-name">' + _esc(parkName) + '</div>';
+    html += '<div class="wp-badges">';
+    html += '<span class="wp-badge ' + profBadgeCls + '">' + profLabel + '</span>';
     if (weather.is_dome) {
-      html += '<div style="padding:0.6rem 0;color:var(--muted);font-size:0.875rem;">&#x1F3DF; Indoor dome — weather conditions do not apply.</div>';
-    } else if (weather.temp_f != null) {
-      html += '<div class="ed-weather-grid">';
-      html += _wxCard(Math.round(weather.temp_f) + '°F',                                           'Temp');
-      html += _wxCard((weather.wind_speed_mph ? Math.round(weather.wind_speed_mph) : '—') + ' mph','Wind');
-      html += _wxCard(weather.wind_direction_label || '—',                                          'Direction');
-      html += '</div>';
-      if (weather.condition) {
-        html += '<div class="ed-stat-row"><span class="ed-stat-label">Sky</span><span class="ed-stat-val">' + _esc(weather.condition) + '</span></div>';
-      }
-      // Impact chips
-      const chips = [];
-      const wSpd  = weather.wind_speed_mph || 0;
-      const wDir  = (weather.wind_direction_label || '').toLowerCase();
-      if (weather.temp_f < 50) chips.push({ t: '&#x2744; Cold — suppresses contact &amp; power', c: 'chip-suppress' });
-      if (weather.temp_f > 80) chips.push({ t: '&#x2600; Warm — favors offense', c: 'chip-boost' });
-      if (wSpd >= 8  && wDir.includes('out')) chips.push({ t: '&#x1F4A8; Wind blowing out — HR boost', c: 'chip-boost' });
-      if (wSpd >= 12 && wDir.includes('in'))  chips.push({ t: '&#x1F4A8; Wind blowing in — suppresses HR', c: 'chip-suppress' });
-      if (!chips.length) chips.push({ t: 'Neutral conditions', c: 'chip-neutral' });
-      html += '<div class="ed-impact-chips">';
-      chips.forEach(function (c) { html += '<span class="ed-impact-chip ' + c.c + '">' + c.t + '</span>'; });
-      html += '</div>';
+      html += '<span class="wp-badge wp-badge-dome">🏗 Dome</span>';
+    } else if (weather.is_retractable) {
+      html += '<span class="wp-badge wp-badge-retractable">↕ Retractable Roof</span>';
     } else {
-      html += '<div class="ed-empty" style="padding:1rem 0">Weather data unavailable.</div>';
+      html += '<span class="wp-badge wp-badge-outdoor">☀ Outdoor</span>';
+    }
+    html += '</div></div>'; // badges, section
+
+    // ── SECTION 2: Park Factors ─────────────────────────────────────────────
+    html += '<div class="wp-section">';
+    html += '<h3 class="wp-section-title">Park Factors <span class="wp-section-avg">100 = League Average</span></h3>';
+
+    if (park.available && park.source !== 'neutral_fallback') {
+      html += '<div class="wp-factors-grid">';
+      var runF  = park.run_factor;
+      var hitF  = park.hit_factor;
+      var hrF   = park.hr_factor;
+      var lhbHR = park.lhb_hr_factor;
+      var rhbHR = park.rhb_hr_factor;
+      if (runF) html += _wpFactorCard('Run Factor', runF, '');
+      if (hitF) html += _wpFactorCard('Hit Factor', hitF, isHR ? '' : 'primary');
+      if (hrF)  html += _wpFactorCard('HR Factor',  hrF,  isHR ? 'primary' : '');
+      if (isHR && lhbHR) html += _wpFactorCard('LHB HR Factor', lhbHR, '');
+      if (isHR && rhbHR) html += _wpFactorCard('RHB HR Factor', rhbHR, '');
+      html += '</div>';
+    } else if (park.fallback_note) {
+      html += '<div class="wp-fallback-note">' + _esc(park.fallback_note) + '</div>';
+    } else {
+      html += '<div class="wp-fallback-note">Park factor data unavailable for this stadium.</div>';
+    }
+    html += '</div>'; // section
+
+    // ── SECTION 3: Conditions ────────────────────────────────────────────────
+    html += '<div class="wp-section">';
+    html += '<h3 class="wp-section-title">Conditions</h3>';
+    if (weather.is_dome) {
+      html += '<div class="wp-dome-note">🏗 Indoor dome — weather conditions do not affect play. '
+            + 'Park dimensions and run/HR factors still apply.</div>';
+    } else if (weather.is_retractable && weather.temp_f == null) {
+      html += '<div class="wp-dome-note">↕ Retractable-roof stadium — roof status determines weather impact. '
+            + 'Park factors apply regardless of roof position.</div>';
+    } else if (weather.temp_f != null) {
+      if (weather.is_retractable) {
+        html += '<div class="wp-dome-note" style="margin-bottom:0.6rem">↕ Retractable roof — park factors apply regardless of roof position.</div>';
+      }
+      html += _wpConditionsGrid(weather);
+    } else {
+      html += '<div class="wp-empty">Weather data unavailable.</div>';
+    }
+    html += '</div>'; // section
+
+    // ── SECTION 4: Impact Summary ────────────────────────────────────────────
+    html += '<div class="wp-section">';
+    html += '<h3 class="wp-section-title">Impact Summary</h3>';
+    html += '<div class="wp-impact-chips">';
+    var chips = _buildImpactChips(weather, park, isHR);
+    if (!chips.length) chips = [{ text: '✓ Neutral conditions — no significant environment edge', cls: 'wp-chip-neutral' }];
+    chips.forEach(function(c) { html += '<span class="wp-chip ' + c.cls + '">' + c.text + '</span>'; });
+    html += '</div></div>'; // chips, section
+
+    // ── SECTION 5: Environment Conclusion ───────────────────────────────────
+    var conclusion = _buildEnvConclusion(weather, park, isHR);
+    if (conclusion) {
+      html += '<div class="wp-section">';
+      html += '<h3 class="wp-section-title">Environment Impact</h3>';
+      html += '<div class="wp-conclusion ' + conclusion.cls + '">';
+      html += '<div class="wp-conclusion-headline">' + _esc(conclusion.headline) + '</div>';
+      html += '<div class="wp-conclusion-body">' + _esc(conclusion.body) + '</div>';
+      html += '</div></div>';
+    }
+
+    // ── SECTION 6: Park Notes ────────────────────────────────────────────────
+    var notes = park.tendency_notes;
+    if (notes) {
+      html += '<div class="wp-section">';
+      html += '<h3 class="wp-section-title">Park Notes</h3>';
+      html += '<div class="wp-park-notes">' + _esc(notes) + '</div>';
+      html += '</div>';
     }
 
     pane.innerHTML = html;
@@ -751,6 +798,190 @@ function searchTable(tableId, query) {
     return '<div class="ed-weather-card"><span class="ed-weather-val">' + _esc(String(val)) + '</span>'
          + '<span class="ed-weather-lbl">' + _esc(lbl) + '</span></div>';
   }
+  // ── Weather & Park helpers ────────────────────────────────────────────────
+  function _wpFactorCard(label, value, highlight) {
+    var rounded = Math.round(value);
+    var cls = '';
+    if (value >= 108) cls = 'wp-factor-hi';
+    else if (value <= 93) cls = 'wp-factor-lo';
+    var hCls = highlight === 'primary' ? ' wp-factor-primary' : '';
+    return '<div class="wp-factor-card' + hCls + '">'
+         + '<div class="wp-factor-label">' + _esc(label) + '</div>'
+         + '<div class="wp-factor-val ' + cls + '">' + rounded + '</div>'
+         + '<div class="wp-factor-desc">' + _esc(_wpFactorDesc(label, value)) + '</div>'
+         + '</div>';
+  }
+
+  function _wpFactorDesc(label, value) {
+    var isHRLabel = label.indexOf('HR') >= 0 || label.indexOf('Run') >= 0;
+    if (isHRLabel) {
+      if (value >= 120) return 'Home runs are much easier to hit here than anywhere else';
+      if (value >= 110) return 'Home runs are easier to hit here than at most stadiums';
+      if (value >= 104) return 'Slightly easier to hit home runs here than average';
+      if (value >= 97)  return 'About the same as a typical MLB stadium';
+      if (value >= 90)  return 'Home runs are harder to hit here than average';
+      return 'One of the toughest parks for home runs in the league';
+    } else {
+      if (value >= 112) return 'Getting a hit is much easier here than at most stadiums';
+      if (value >= 106) return 'Getting a hit is easier here than at most stadiums';
+      if (value >= 103) return 'Slightly more hits than at a typical stadium';
+      if (value >= 97)  return 'About the same hit rate as a typical MLB stadium';
+      if (value >= 90)  return 'Getting hits is harder here than average';
+      return 'One of the toughest parks for getting hits in the league';
+    }
+  }
+
+  function _wpConditionsGrid(weather) {
+    var html = '<div class="wp-conditions-grid">';
+    if (weather.temp_f != null)        html += _wpCondCard(Math.round(weather.temp_f) + '°F', 'Temp', _wpTempClass(weather.temp_f));
+    if (weather.wind_speed_mph != null) html += _wpCondCard(Math.round(weather.wind_speed_mph) + ' mph', 'Wind', '');
+    if (weather.wind_direction_label)   html += _wpCondCard(weather.wind_direction_label, 'Direction', '');
+    if (weather.condition)              html += _wpCondCard(weather.condition, 'Sky', '');
+    html += '</div>';
+    return html;
+  }
+
+  function _wpCondCard(val, lbl, cls) {
+    return '<div class="wp-cond-card' + (cls ? ' ' + cls : '') + '">'
+         + '<span class="wp-cond-val">' + _esc(String(val)) + '</span>'
+         + '<span class="wp-cond-lbl">' + _esc(lbl) + '</span>'
+         + '</div>';
+  }
+
+  function _wpTempClass(t) {
+    if (t < 45) return 'wp-cond-cold';
+    if (t > 82) return 'wp-cond-warm';
+    return '';
+  }
+
+  function _buildImpactChips(weather, park, isHR) {
+    var chips = [];
+    var wSpd  = weather.wind_speed_mph || 0;
+    var wDir  = (weather.wind_direction_label || '').toLowerCase();
+    var temp  = weather.temp_f;
+    var isDome = weather.is_dome;
+    var runF  = park.run_factor  || 100;
+    var hrF   = park.hr_factor   || 100;
+    var hitF  = park.hit_factor  || 100;
+
+    if (isDome) {
+      chips.push({ text: '🏗 Dome neutralizes weather effects', cls: 'wp-chip-neutral' });
+    } else {
+      if (temp != null && temp < 45)  chips.push({ text: '❄ Cold — suppresses contact & power', cls: 'wp-chip-suppress' });
+      if (temp != null && temp > 82)  chips.push({ text: '☀ Warm — favors offense', cls: 'wp-chip-boost' });
+      if (wSpd >= 8  && wDir.indexOf('out') >= 0) chips.push({ text: '💨 Wind blowing out — HR boost', cls: 'wp-chip-boost' });
+      if (wSpd >= 12 && wDir.indexOf('in')  >= 0) chips.push({ text: '💨 Wind blowing in — suppresses HR', cls: 'wp-chip-suppress' });
+      if (wSpd >= 5  && wDir.indexOf('cross') >= 0) chips.push({ text: '💨 Crosswind — unpredictable carry', cls: 'wp-chip-neutral' });
+    }
+
+    // Park-based chips
+    if (park.available && park.source !== 'neutral_fallback') {
+      var profile = park.park_profile || 'neutral';
+      if (profile === 'hitter-friendly')  chips.push({ text: '🏟 Hitter-friendly stadium', cls: 'wp-chip-boost' });
+      if (profile === 'pitcher-friendly') chips.push({ text: '🏟 Pitcher-friendly stadium', cls: 'wp-chip-suppress' });
+
+      if (isHR) {
+        if (hrF >= 110) chips.push({ text: '💣 Strong HR park', cls: 'wp-chip-boost' });
+        else if (hrF <= 91) chips.push({ text: '💣 Suppresses home runs', cls: 'wp-chip-suppress' });
+      } else {
+        if (hitF >= 106) chips.push({ text: '🎯 Favors contact hitters', cls: 'wp-chip-boost' });
+        else if (hitF <= 95) chips.push({ text: '🎯 Suppresses hit rate', cls: 'wp-chip-suppress' });
+      }
+    }
+
+    return chips;
+  }
+
+  // Builds a plain-English "Environment Impact" conclusion.
+  // Returns { headline, body, cls } or null.
+  function _buildEnvConclusion(weather, park, isHR) {
+    var isDome = weather.is_dome;
+    var temp   = weather.temp_f;
+    var wSpd   = weather.wind_speed_mph || 0;
+    var wDir   = (weather.wind_direction_label || '').toLowerCase();
+    var runF   = park.run_factor  || 100;
+    var hrF    = park.hr_factor   || 100;
+    var hitF   = park.hit_factor  || 100;
+    var src    = park.source || '';
+
+    if (src === 'neutral_fallback' && !temp) return null; // nothing useful to say
+
+    // Score the overall environment: positive = helps hitters, negative = helps pitchers
+    var score = 0;
+    var reasons = [];
+
+    if (isHR) {
+      // Score for HR prop
+      if (hrF >= 115)      { score += 3; reasons.push('strong HR park'); }
+      else if (hrF >= 108) { score += 2; reasons.push('above-average HR park'); }
+      else if (hrF >= 103) { score += 1; reasons.push('slightly above-average HR park'); }
+      else if (hrF <= 88)  { score -= 3; reasons.push('one of the toughest HR parks in baseball'); }
+      else if (hrF <= 94)  { score -= 2; reasons.push('below-average HR park'); }
+      else if (hrF <= 97)  { score -= 1; reasons.push('slightly below-average HR park'); }
+
+      if (!isDome) {
+        if (wSpd >= 10 && wDir.indexOf('out') >= 0) { score += 2; reasons.push('wind blowing out'); }
+        if (wSpd >= 15 && wDir.indexOf('in')  >= 0) { score -= 2; reasons.push('wind blowing in hard'); }
+        if (temp != null && temp > 82) { score += 1; reasons.push('warm weather'); }
+        if (temp != null && temp < 45) { score -= 1; reasons.push('cold weather'); }
+      }
+    } else {
+      // Score for hit prop
+      if (hitF >= 112)     { score += 3; reasons.push('one of the best parks for getting hits'); }
+      else if (hitF >= 106){ score += 2; reasons.push('above-average park for hits'); }
+      else if (hitF >= 103){ score += 1; reasons.push('slightly above-average park for hits'); }
+      else if (hitF <= 90) { score -= 3; reasons.push('one of the toughest parks for getting hits'); }
+      else if (hitF <= 95) { score -= 2; reasons.push('below-average park for hits'); }
+      else if (hitF <= 97) { score -= 1; reasons.push('slightly below-average park for hits'); }
+
+      if (!isDome) {
+        if (temp != null && temp > 82) { score += 1; reasons.push('warm weather helps offense'); }
+        if (temp != null && temp < 45) { score -= 1; reasons.push('cold weather suppresses offense'); }
+        if (wSpd >= 15 && wDir.indexOf('in') >= 0) { score -= 1; reasons.push('strong wind blowing in'); }
+      }
+    }
+
+    var headline, body, cls;
+
+    if (score >= 3) {
+      headline = isHR ? 'Strong home run environment.' : 'Very favorable for getting hits.';
+      cls = 'wp-conclusion-positive';
+      body = isHR
+        ? 'The stadium and current conditions combine to create one of the better environments for hitting home runs. '
+          + (reasons.length ? 'Key factors: ' + reasons.join(', ') + '.' : '')
+        : 'The stadium and conditions make getting a hit easier than at a typical game. '
+          + (reasons.length ? 'Key factors: ' + reasons.join(', ') + '.' : '');
+    } else if (score >= 1) {
+      headline = isHR ? 'Slightly positive for home runs.' : 'Slightly favorable for hits.';
+      cls = 'wp-conclusion-slight-positive';
+      body = isHR
+        ? 'This environment gives hitters a modest boost for home runs compared to the league average.'
+        : 'Conditions here give hitters a small advantage over a typical game environment.';
+    } else if (score <= -3) {
+      headline = isHR ? 'Tough environment for home runs.' : 'Tough environment for getting hits.';
+      cls = 'wp-conclusion-negative';
+      body = isHR
+        ? 'The stadium and conditions make hitting home runs significantly harder than average. '
+          + (reasons.length ? 'Key factors: ' + reasons.join(', ') + '.' : '')
+        : 'Getting hits here is meaningfully harder than at a typical stadium. '
+          + (reasons.length ? 'Key factors: ' + reasons.join(', ') + '.' : '');
+    } else if (score <= -1) {
+      headline = isHR ? 'Slightly negative for home runs.' : 'Slightly negative for hits.';
+      cls = 'wp-conclusion-slight-negative';
+      body = isHR
+        ? 'This environment gives pitchers a modest edge — home runs are a bit harder to hit than average here.'
+        : 'Conditions here give pitchers a small advantage over a typical game environment.';
+    } else {
+      headline = isHR ? 'Neutral environment for home runs.' : 'Neutral environment for hits.';
+      cls = 'wp-conclusion-neutral';
+      body = isDome
+        ? 'The enclosed dome removes weather as a factor. The park itself plays close to the MLB average.'
+        : 'The stadium and current weather conditions are close to the league average — no significant advantage either way.';
+    }
+
+    return { headline: headline, body: body, cls: cls };
+  }
+
   function _impliedProb(americanOdds) {
     const o = parseInt(String(americanOdds).replace(/[^0-9\-]/g, ''), 10);
     if (isNaN(o) || o === 0) return null;

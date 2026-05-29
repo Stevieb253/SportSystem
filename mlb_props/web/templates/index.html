@@ -606,9 +606,9 @@
     <div>
       <strong>Model-Only Mode</strong>
       {% if odds_key_configured %}
-      <span>Showing top picks by model confidence. Click <strong>↻ Refresh Odds</strong> to load live lines and unlock edge calculations.</span>
+      <span>Showing top picks by projected probability. Click <strong>↻ Refresh Odds</strong> to load live lines and unlock edge calculations.</span>
       {% else %}
-      <span>Showing top picks by model confidence. Add an <code>ODDS_API_KEY</code> to your <code>.env</code> file for edge calculations.</span>
+      <span>Showing top picks by projected probability. Add an <code>ODDS_API_KEY</code> to your <code>.env</code> file for edge calculations.</span>
       {% endif %}
     </div>
     {% if odds_key_configured %}

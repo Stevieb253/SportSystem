@@ -80,15 +80,21 @@ def build_game_context(
     away_record = standings.get(away_id) or standings.get(str(away_id)) or {}
 
     # ── Park factors ───────────────────────────────────────────────────────────
-    park_ctx = _get_park_ctx(v.get("name", ""), park_factors_df)
+    park_ctx = _get_park_ctx(v.get("name", ""), park_factors_df, home_abbr)
 
     # ── Aggregate offensive projections ───────────────────────────────────────
     home_offense = _aggregate_offense(home_hit, home_hr)
     away_offense = _aggregate_offense(away_hit, away_hr)
 
     # ── Weather context ────────────────────────────────────────────────────────
+    # Prefer static park data for dome/retractable status — more reliable than
+    # the weather object, which may not set is_dome for retractable-roof parks.
+    is_dome        = park_ctx.get("is_dome",        bool(w.get("is_dome")))
+    is_retractable = park_ctx.get("is_retractable", False)
+
     weather_ctx = {
-        "is_dome":          bool(w.get("is_dome")),
+        "is_dome":          is_dome,
+        "is_retractable":   is_retractable,
         "temp_f":           w.get("temp_f"),
         "wind_speed_mph":   w.get("wind_speed_mph"),
         "wind_direction_deg": w.get("wind_direction_deg"),
@@ -100,6 +106,7 @@ def build_game_context(
     data_availability = {
         "standings":    bool(home_record or away_record),
         "park_factors": park_ctx.get("available", False),
+        "park_source":  park_ctx.get("source", "none"),  # "static", "live+static", "neutral_fallback"
         "weather":      weather_ctx.get("temp_f") is not None,
         "home_lineup":  len(home_hit) > 0,
         "away_lineup":  len(away_hit) > 0,
@@ -113,11 +120,12 @@ def build_game_context(
     key_players = _build_key_players(home_hit, away_hit, home_hr, away_hr, home_abbr, away_abbr)
 
     return {
-        "game_pk":   gdict.get("game_pk", 0),
-        "date":      date_str or gdict.get("date", ""),
-        "status":    gdict.get("status", "scheduled"),
-        "venue":     v.get("name", ""),
-        "is_dome":   bool(w.get("is_dome")),
+        "game_pk":      gdict.get("game_pk", 0),
+        "date":         date_str or gdict.get("date", ""),
+        "status":       gdict.get("status", "scheduled"),
+        "venue":        v.get("name", ""),
+        "is_dome":      is_dome,
+        "is_retractable": is_retractable,
 
         "home_team": {
             "name":         home.get("name", ""),
@@ -262,30 +270,47 @@ def _offensive_edge(home_off: dict, away_off: dict) -> str:
 
 
 def _weather_park_edge(weather_ctx: dict, park_ctx: dict) -> str:
-    """Compute weather_park_edge label."""
-    # Dome — weather has little to no impact
-    if weather_ctx.get("is_dome"):
-        return "neutral"
+    """Compute weather_park_edge label.
 
-    # Park factors available
+    Uses run_factor from static park data as the primary signal.
+    Weather adjusts the edge for outdoor parks; dome/retractable parks
+    are assessed on park factors only (weather impact is reduced/absent).
+    """
+    is_dome        = weather_ctx.get("is_dome", False)
+    is_retractable = weather_ctx.get("is_retractable", False)
+
+    # Park factors drive the primary assessment (now always available from static data)
     if park_ctx.get("available"):
-        hit_factor = park_ctx.get("hit_factor")
-        if hit_factor is not None:
-            if hit_factor >= 108:
+        # Prefer run_factor (most holistic) then hit_factor as fallback
+        factor = park_ctx.get("run_factor") or park_ctx.get("hit_factor")
+        if factor is not None:
+            if factor >= 108:
                 return "hitter_friendly"
-            if hit_factor <= 93:
+            if factor <= 93:
                 return "pitcher_friendly"
+
+            # Near-neutral park — check weather for outdoor parks only
+            if not is_dome and not is_retractable:
+                temp_f = weather_ctx.get("temp_f")
+                if temp_f is not None:
+                    if temp_f < 45:
+                        return "pitcher_friendly"
+                    wind_speed = weather_ctx.get("wind_speed_mph") or 0
+                    if temp_f >= 88 and wind_speed >= 12:
+                        return "hitter_friendly"
+
             return "neutral"
 
-    # Park factors unavailable — fall back to weather
-    temp_f = weather_ctx.get("temp_f")
-    if temp_f is not None:
-        if temp_f < 50:
-            return "pitcher_friendly"
-        wind_speed = weather_ctx.get("wind_speed_mph") or 0
-        if temp_f >= 85 and wind_speed >= 10:
-            return "hitter_friendly"
-        return "neutral"
+    # No park data at all — fall back to weather signals only
+    if not is_dome and not is_retractable:
+        temp_f = weather_ctx.get("temp_f")
+        if temp_f is not None:
+            if temp_f < 50:
+                return "pitcher_friendly"
+            wind_speed = weather_ctx.get("wind_speed_mph") or 0
+            if temp_f >= 85 and wind_speed >= 10:
+                return "hitter_friendly"
+            return "neutral"
 
     return "unavailable"
 
@@ -579,32 +604,39 @@ def _get_player_id(result: Any) -> int:
     return 0
 
 
-def _get_park_ctx(venue_name: str, park_factors_df: Any) -> dict:
-    """Look up park hit/HR factors for a venue."""
-    empty = {"available": False, "venue": venue_name, "hit_factor": None, "hr_factor": None}
-    if park_factors_df is None or not venue_name:
-        return empty
-    try:
-        import pandas as pd
-        vn = venue_name.lower()
-        row = park_factors_df[
-            park_factors_df["venue"].str.lower().str.contains(vn[:8], na=False)
-        ]
-        if row.empty and " " in venue_name:
-            # Try first word of venue name
-            first_word = venue_name.split()[0].lower()
+def _get_park_ctx(venue_name: str, park_factors_df: Any, home_team_abbr: str = "") -> dict:
+    """Look up park factors for a venue.
+
+    Priority:
+      1. Static dataset (always available, always tried first for game context)
+      2. Live park_factors_df from pybaseball (merges run_factor if DF has it)
+      3. Neutral fallback (100 for all) — logged at WARNING level
+
+    Returns a rich dict including run_factor, hr_factor, hit_factor, handedness
+    splits, dome/retractable flags, and tendency_notes for Gemini.
+    """
+    from data.static_park_factors import lookup_park_factors
+
+    # ── Primary: static dataset ───────────────────────────────────────────────
+    ctx = lookup_park_factors(venue_name, home_team_abbr)
+
+    # ── Optional: upgrade run_factor from live DataFrame if available ─────────
+    if park_factors_df is not None and not getattr(park_factors_df, "empty", True):
+        try:
+            vn = venue_name.lower()
             row = park_factors_df[
-                park_factors_df["venue"].str.lower().str.contains(first_word, na=False)
+                park_factors_df["venue"].str.lower().str.contains(vn[:8], na=False)
             ]
-        if row.empty:
-            return empty
-        r = row.iloc[0]
-        return {
-            "available":  True,
-            "venue":      venue_name,
-            "hit_factor": float(r.get("basic_5yr", r.get("hit_factor", 100))),
-            "hr_factor":  float(r.get("hr_factor", r.get("HR", 100))),
-        }
-    except Exception as exc:
-        logger.debug("Park factor lookup failed for '%s': %s", venue_name, exc)
-        return empty
+            if not row.empty:
+                r = row.iloc[0]
+                live_hit = r.get("basic_5yr", r.get("hit_factor"))
+                live_hr  = r.get("hr_factor", r.get("HR"))
+                if live_hit is not None:
+                    ctx["hit_factor"] = float(live_hit)
+                    ctx["source"] = "live+static"
+                if live_hr is not None:
+                    ctx["hr_factor"] = float(live_hr)
+        except Exception as exc:
+            logger.debug("Live park factor merge failed for '%s': %s", venue_name, exc)
+
+    return ctx
