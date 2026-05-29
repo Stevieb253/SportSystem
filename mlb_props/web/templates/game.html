@@ -225,7 +225,7 @@
         <button class="btn-explain btn-explain-icon"
                 data-player-id="{{ pdict.get('player_id', 0) }}"
                 data-prop-type="hit"
-                title="AI Analysis">&#x2736;</button>
+                title="Matchup Analysis">&#x2736;</button>
       </div>
       {% endfor %}
     </div>
@@ -404,7 +404,7 @@
         // ── Unavailable state ──
         if (!bd.available) {
           html += '<div class="gb-unavailable">';
-          html += '<p>AI analysis is temporarily unavailable. The matchup data above is still current.</p>';
+          html += '<p>Analysis is temporarily unavailable. The matchup data above is still current.</p>';
           if (bd.error) html += '<p class="gb-error-detail">' + _esc(bd.error) + '</p>';
           html += '</div>';
           body.innerHTML = html;
@@ -545,7 +545,7 @@
       }
 
       function _renderError(msg) {
-        body.innerHTML = '<div class="gb-unavailable"><p>' + _esc(msg || 'Failed to load AI analysis. Please try again.') + '</p></div>';
+        body.innerHTML = '<div class="gb-unavailable"><p>' + _esc(msg || 'Failed to load analysis. Please try again.') + '</p></div>';
         body.hidden = false;
       }
 

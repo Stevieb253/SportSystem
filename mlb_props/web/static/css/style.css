@@ -2000,7 +2000,7 @@ a { color: inherit; text-decoration: none; }
   text-align: right;
 }
 
-/* ── AI Analysis card ────────────────────────────────────── */
+/* ── Matchup Analysis card ───────────────────────────────── */
 .ed-ai-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2281,6 +2281,246 @@ a { color: inherit; text-decoration: none; }
 .chip-boost    { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
 .chip-suppress { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
 .chip-neutral  { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+
+/* ── Weather & Park — redesigned component (wp-*) ───────── */
+
+/* Sections */
+.wp-section {
+  margin-bottom: 1.1rem;
+}
+.wp-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 0 0 0.55rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.wp-section-sub {
+  font-size: 0.65rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.wp-section-avg {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-2);
+}
+
+/* Stadium row */
+.wp-section-stadium {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.8rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.wp-stadium-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+.wp-badges {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+/* Profile / type badges */
+.wp-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.wp-badge-hitter     { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.wp-badge-pitcher    { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+.wp-badge-neutral    { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+.wp-badge-dome       { background: #e0f2fe; color: #075985; border: 1px solid #7dd3fc; }
+.wp-badge-retractable{ background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.wp-badge-outdoor    { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+
+/* Park factor cards */
+.wp-factors-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+.wp-factor-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.7rem 0.65rem;
+  text-align: center;
+  transition: border-color 0.15s;
+}
+.wp-factor-card.wp-factor-primary {
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 0 0 1px var(--accent, #3b82f6) inset;
+}
+.wp-factor-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+.wp-factor-val {
+  font-family: var(--font-mono);
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 0.2rem;
+}
+.wp-factor-val.wp-factor-hi { color: var(--green); }
+.wp-factor-val.wp-factor-lo { color: var(--red); }
+.wp-factor-desc {
+  font-size: 0.6rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+/* Fallback note */
+.wp-fallback-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.65rem 0.85rem;
+  line-height: 1.5;
+}
+
+/* Dome / retractable note */
+.wp-dome-note {
+  font-size: 0.82rem;
+  color: var(--muted);
+  background: #e0f2fe;
+  color: #075985;
+  border: 1px solid #7dd3fc;
+  border-radius: var(--radius-lg);
+  padding: 0.6rem 0.85rem;
+  line-height: 1.5;
+}
+
+/* Conditions grid */
+.wp-conditions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+@media (min-width: 480px) {
+  .wp-conditions-grid { grid-template-columns: repeat(4, 1fr); }
+}
+.wp-cond-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.7rem 0.6rem;
+  text-align: center;
+}
+.wp-cond-card.wp-cond-cold {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.wp-cond-card.wp-cond-warm {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+.wp-cond-val {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  display: block;
+}
+.wp-cond-lbl {
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  display: block;
+  margin-top: 0.15rem;
+}
+
+/* Impact chips */
+.wp-impact-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.wp-chip {
+  font-size: 0.73rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 99px;
+  line-height: 1.4;
+}
+.wp-chip-boost    { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.wp-chip-suppress { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+.wp-chip-neutral  { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+
+/* Environment conclusion card */
+.wp-conclusion {
+  border-radius: var(--radius-lg);
+  padding: 0.75rem 1rem;
+  border: 1px solid transparent;
+}
+.wp-conclusion-headline {
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+  line-height: 1.35;
+}
+.wp-conclusion-body {
+  font-size: 0.78rem;
+  line-height: 1.55;
+  opacity: 0.9;
+}
+.wp-conclusion-positive        { background: #dcfce7; color: #14532d; border-color: #86efac; }
+.wp-conclusion-slight-positive { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+.wp-conclusion-negative        { background: #fee2e2; color: #7f1d1d; border-color: #fca5a5; }
+.wp-conclusion-slight-negative { background: #fff7f7; color: #991b1b; border-color: #fecaca; }
+.wp-conclusion-neutral         { background: var(--surface); color: var(--text-2); border-color: var(--border); }
+
+/* Park notes */
+.wp-park-notes {
+  font-size: 0.82rem;
+  color: var(--text-2);
+  line-height: 1.6;
+  background: var(--surface);
+  border-left: 3px solid var(--border);
+  padding: 0.6rem 0.85rem;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+}
+
+/* Empty state */
+.wp-empty {
+  font-size: 0.82rem;
+  color: var(--muted);
+  padding: 0.5rem 0;
+}
+
+/* Responsive: 2-col factors on narrow screens */
+@media (max-width: 380px) {
+  .wp-factors-grid { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* ── Odds & Edge ─────────────────────────────────────────── */
 .ed-odds-list { display: flex; flex-direction: column; gap: 0.4rem; }

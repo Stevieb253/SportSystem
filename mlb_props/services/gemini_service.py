@@ -33,6 +33,35 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_HOURS = 2.0
 
+# Bump this string whenever the game-analysis prompt or context schema changes.
+# Including it in the cache key causes all old entries to miss automatically.
+GAME_ANALYSIS_CACHE_VERSION = "park_v2"
+
+# Bump whenever the prop explanation prompt or voice/style changes.
+# Including this in the cache key causes all old entries to miss automatically.
+PROP_ANALYSIS_CACHE_VERSION = "analyst_voice_v3"
+
+# Phrases that indicate a pre-analyst-voice cached prop response.
+# Any match → cache entry is invalidated and a fresh call is made.
+_PROP_STALE_MARKERS: tuple[str, ...] = (
+    # Model-centric language (pre-analyst-voice prompts)
+    "the model assigns",
+    "the model predicts",
+    "the model has confidence",
+    "the model has high",
+    "the model gives",
+    "the model projects",
+    "assigns a ",        # catches "assigns a 67.5% probability"
+    "assigns him a ",
+    # Mechanical metric-dump openers (pre-narrative prompts)
+    "enters this matchup with elite",
+    "enters this matchup with strong",
+    "enters this matchup with advanced",
+    "enters this matchup with impressive",
+    "statistical profile suggests",
+    "statistically speaking",
+)
+
 # ── Safety rules ───────────────────────────────────────────────────────────────
 # Patterns scanned across every text field returned by Gemini.
 # Two tiers:
@@ -121,9 +150,17 @@ def explain_prop(
     if cache and cache_key:
         cached = cache.get(cache_key, ttl_hours=_CACHE_TTL_HOURS)
         if cached is not None:
-            logger.info("Gemini prop cache HIT: %s", cache_key)
-            return cached
-        logger.debug("Gemini prop cache MISS: %s", cache_key)
+            if _is_valid_prop_response(cached):
+                logger.info("Gemini prop cache HIT valid: %s", cache_key)
+                return cached
+            else:
+                logger.warning(
+                    "Gemini prop cache HIT invalidated — stale/incomplete response  key=%s",
+                    cache_key,
+                )
+                cache.invalidate(cache_key)
+        else:
+            logger.debug("Gemini prop cache MISS: %s", cache_key)
 
     if not _init_gemini():
         return {**_empty, "model": _active_model_name or "unknown", "error": _init_error_msg or "Gemini not initialised"}
@@ -177,7 +214,13 @@ def explain_prop(
             result = _check_response_safety(result, "prop", avail)
 
             if cache and cache_key:
-                cache.set(cache_key, result)
+                if _is_valid_prop_response(result):
+                    cache.set(cache_key, result)
+                else:
+                    logger.warning(
+                        "Gemini prop response NOT cached — stale markers or missing fields  key=%s",
+                        cache_key,
+                    )
 
             return result
 
@@ -245,6 +288,30 @@ def explain_game(
         return {**_empty, "model": _active_model_name or "unknown", "error": _init_error_msg or "Gemini not initialised"}
 
     from google.genai import types as _genai_types
+
+    # ── Park context diagnostic log ───────────────────────────────────────────
+    _pk = ctx.get("game_pk", "?")
+    _park = ctx.get("park") or {}
+    _weather = ctx.get("weather") or {}
+    logger.info(
+        "Gemini game PRE-CALL park context — game_pk=%s  venue=%r  "
+        "home_team=%r  park_source=%r  "
+        "run=%s  hr=%s  hit=%s  lhb_hr=%s  rhb_hr=%s  "
+        "is_dome=%s  is_retractable=%s  tendency=%r",
+        _pk,
+        _park.get("venue") or ctx.get("venue"),
+        ctx.get("home_team_abbr"),
+        _park.get("source"),
+        _park.get("run_factor"),
+        _park.get("hr_factor"),
+        _park.get("hit_factor"),
+        _park.get("lhb_hr_factor"),
+        _park.get("rhb_hr_factor"),
+        _weather.get("is_dome"),
+        _weather.get("is_retractable"),
+        (_park.get("tendency_notes") or "")[:80],
+    )
+
     prompt = _build_game_prompt(ctx)
 
     # Debug dump — only writes files when GEMINI_DEBUG=true in .env
@@ -469,7 +536,33 @@ def _build_prompt(ctx: dict) -> str:
     prob_str = f"{prob:.1%}" if prob is not None else "N/A"
 
     lines: list[str] = [
-        "You are a baseball analyst explaining a statistical model's probability for a player prop.",
+        "You are a professional baseball analyst writing a concise matchup preview for a sports betting audience.",
+        "Write like a knowledgeable baseball writer crafting a game-day betting preview — not a stats report.",
+        "",
+        "WRITING STYLE — follow these rules for every explanation:",
+        "1. Lead with the KEY TAKEAWAY about the matchup, not with the player's metrics.",
+        "   Ask yourself: what is the most important thing to know about this specific matchup tonight?",
+        "   Start there. Then use statistics to back it up.",
+        "2. Weave statistics into the narrative. Explain WHY a number matters in THIS matchup, not just what it is.",
+        "   Connect related stats with transitions: 'That tracks with...', 'This becomes more significant because...',",
+        "   'Against a pitcher like Giolito, that edge is pronounced...'",
+        "3. End the explanation with a clear sense of what makes this interesting or where the primary risk lies.",
+        "",
+        "EXAMPLES:",
+        "BAD — mechanical and list-driven:",
+        "  'Wood enters this matchup with elite offensive metrics, including a 61.2% hard-hit rate and 13.4% barrel rate.",
+        "   He hits .391 against fastballs, which is significant power against the pitch type Giolito throws most often.'",
+        "GOOD — takeaway-first, narrative:",
+        "  'Wood is one of the most dangerous power hitters in baseball right now, and this matchup plays into his strengths.",
+        "   Giolito relies heavily on his fastball — a pitch Wood has handled exceptionally well, batting .391 against it",
+        "   while consistently driving the ball with authority. His 61.2% hard-hit rate and 13.4% barrel rate confirm",
+        "   this is not small-sample noise. The main risk is Giolito's ability to mix in breaking balls to disrupt timing.'",
+        "",
+        "BANNED PHRASES — never use these:",
+        "  'enters this matchup with elite/strong/advanced metrics/profile'",
+        "  'statistical profile suggests', 'statistically speaking', 'from a statistical standpoint'",
+        "  'significant power against the pitch type', 'elite offensive metrics'",
+        "  'the model', 'the model assigns/predicts/gives', probability percentages",
         "",
         "CRITICAL RULES — violations will be flagged and logged:",
         "1. Only cite statistics explicitly provided in this prompt. Do NOT invent, estimate, or assume any number.",
@@ -610,11 +703,22 @@ def _build_prompt(ctx: dict) -> str:
         "=" * 60,
         "Respond with exactly this JSON structure (no markdown, no extra keys):",
         "{",
-        '  "explanation": "3 to 5 sentences explaining the key drivers of the model probability. '
-        'Reference specific stats from the data above.",',
-        '  "confidence_summary": "One sentence on overall data quality and confidence level.",',
-        '  "key_factors": ["most important factor", "second factor", "third factor"],',
-        '  "risk_factors": ["main concern", "second concern"],',
+        '  "explanation": "3 to 5 sentences in a narrative analyst voice. '
+        'STRUCTURE: Start with the key takeaway about this matchup (not the player\'s metrics). '
+        'Then use 1-2 specific statistics to support it, explaining what they mean in context. '
+        'Connect the pitch matchup, park, or weather data if relevant. '
+        'End with what makes this compelling or where the main risk lies. '
+        'Do NOT open with \'[Name] enters this matchup with...\' or any variant. '
+        'Do NOT list stats without explaining why they matter here. '
+        'Do NOT use: \'elite/strong metrics\', \'statistical profile\', \'the model\', probability percentages.",',
+        '  "confidence_summary": "A short analyst label followed by one sentence of plain-English context. '
+        'Format: \'[Label]: [reason]\'. '
+        'Labels: Strong Matchup, Favorable Outlook, Mixed Signals, Proceed with Caution, Lean Against. '
+        'The reason should explain the matchup dynamic, not describe stats in isolation. '
+        'Example: \'Strong Matchup: Wood has punished this type of pitcher all season and tonight\'s conditions add to the edge.\' '
+        'Do NOT say \'the model has confidence\', \'high confidence\', or \'elite metrics\'.",',
+        '  "key_factors": ["one sentence per factor — state the fact AND why it matters in this matchup"],',
+        '  "risk_factors": ["one sentence per risk — state what could go wrong and why it is a genuine concern"],',
         '  "sample_size_warnings": ["any BvP or recent-form sample too small to be reliable"]',
         "}",
     ]
@@ -836,6 +940,28 @@ def _make_game_empty() -> dict:
 # Prose fields that must all be non-empty for a game response to be considered valid.
 # Used to gate both caching (never write bad entries) and cache reads (invalidate stale/empty ones).
 _REQUIRED_GAME_PROSE = ("summary", "pitching_edge", "offensive_edge", "weather_park_impact")
+_REQUIRED_PROP_PROSE = ("explanation",)
+
+
+def _is_valid_prop_response(resp: dict) -> bool:
+    """Return True if a prop explanation response is cacheable / usable.
+
+    Fails when:
+      - available is False (API/auth error)
+      - explanation field is empty
+      - explanation contains pre-analyst-voice model-speak (stale cache)
+    """
+    if not (isinstance(resp, dict) and resp.get("available")):
+        return False
+    if not all(isinstance(resp.get(f), str) and resp.get(f) for f in _REQUIRED_PROP_PROSE):
+        return False
+    text = " ".join([
+        resp.get("explanation", ""),
+        resp.get("confidence_summary", ""),
+    ]).lower()
+    if any(m in text for m in _PROP_STALE_MARKERS):
+        return False
+    return True
 
 
 def _is_valid_game_response(resp: dict) -> bool:
@@ -856,7 +982,24 @@ def _is_valid_game_response(resp: dict) -> bool:
         return False
     if resp.get("used_fallback_summary"):
         return False
-    return all(isinstance(resp.get(f), str) and resp.get(f) for f in _REQUIRED_GAME_PROSE)
+    if not all(isinstance(resp.get(f), str) and resp.get(f) for f in _REQUIRED_GAME_PROSE):
+        return False
+
+    # Invalidate responses that pre-date the static park factor dataset.
+    # Before that change, Gemini always received "park factors unavailable" and
+    # echoed it back into data_caveats and weather_park_impact.  Any cached
+    # response containing that language must be regenerated with the new prompt.
+    _STALE_MARKERS = ("park hit/hr factors", "park factors: unavailable",
+                      "park factors were unavailable", "park factors data is unavailable",
+                      "park factors are unavailable")
+    all_text = " ".join([
+        resp.get("weather_park_impact", ""),
+        *[str(c) for c in (resp.get("data_caveats") or [])],
+    ]).lower()
+    if any(m in all_text for m in _STALE_MARKERS):
+        return False
+
+    return True
 
 
 def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknown") -> dict:
@@ -894,7 +1037,7 @@ def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknow
     # ── Summary ───────────────────────────────────────────────────────────────
     parts = [f"{away_abbr} visits {home_abbr}."]
     if hp_name != "TBD" and ap_name != "TBD":
-        parts.append(f"The model projects {ap_name} ({away_abbr}) against {hp_name} ({home_abbr}).")
+        parts.append(f"{ap_name} ({away_abbr}) takes the mound against {hp_name} ({home_abbr}).")
     elif hp_name != "TBD":
         parts.append(f"{home_abbr} starts {hp_name}.")
     elif ap_name != "TBD":
@@ -902,12 +1045,12 @@ def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknow
 
     if pitch_edge in ("home", "away"):
         edge_team = home_name if pitch_edge == "home" else away_name
-        parts.append(f"The pitching model gives a slight edge to {edge_team}.")
+        parts.append(f"The pitching edge leans toward {edge_team}.")
     elif off_edge in ("home", "away"):
         edge_team = home_name if off_edge == "home" else away_name
-        parts.append(f"The offensive projection model slightly favors {edge_team}.")
+        parts.append(f"The offensive edge leans toward {edge_team}.")
     else:
-        parts.append("The model projects this as a relatively even matchup.")
+        parts.append("This shapes up as a relatively even matchup.")
     summary = " ".join(parts)
 
     # ── Pitching edge ─────────────────────────────────────────────────────────
@@ -916,21 +1059,19 @@ def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknow
     if avail.get("pitchers") and hp_xera is not None and ap_xera is not None:
         if pitch_edge == "home":
             pitching_edge = (
-                f"The model gives {home_abbr} the pitching edge. "
-                f"{hp_name} (xERA {hp_xera:.2f}) projects better than "
-                f"{ap_name} (xERA {ap_xera:.2f}) by predictive metrics."
+                f"{home_abbr} holds the pitching edge: {hp_name} (xERA {hp_xera:.2f}) "
+                f"profiles better than {ap_name} (xERA {ap_xera:.2f}) by expected metrics."
             )
         elif pitch_edge == "away":
             pitching_edge = (
-                f"The model gives {away_abbr} the pitching edge. "
-                f"{ap_name} (xERA {ap_xera:.2f}) projects better than "
-                f"{hp_name} (xERA {hp_xera:.2f}) by predictive metrics."
+                f"{away_abbr} holds the pitching edge: {ap_name} (xERA {ap_xera:.2f}) "
+                f"profiles better than {hp_name} (xERA {hp_xera:.2f}) by expected metrics."
             )
         else:
             pitching_edge = (
-                f"The model projects a neutral or mixed pitching matchup — "
+                f"This is a neutral pitching matchup — "
                 f"{ap_name} (xERA {ap_xera:.2f}) and {hp_name} (xERA {hp_xera:.2f}) "
-                "are close in predictive metrics."
+                "are close in expected performance."
             )
     elif avail.get("pitchers"):
         pitching_edge = f"Pitching edge: {pitch_edge}. Detailed xERA values unavailable."
@@ -968,31 +1109,44 @@ def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknow
         offensive_edge = "Offensive projection data unavailable."
 
     # ── Weather / park impact ─────────────────────────────────────────────────
-    if weather.get("is_dome"):
-        weather_park_impact = "Indoor stadium — weather has little to no impact on scoring."
+    is_dome        = weather.get("is_dome", False)
+    is_retractable = weather.get("is_retractable", False)
+    rf  = park.get("run_factor")  or park.get("hit_factor") or 100
+    hrf = park.get("hr_factor")  or 100
+    park_notes = park.get("tendency_notes", "")
+
+    if is_dome:
+        weather_park_impact = (
+            f"Fully enclosed dome — weather has no impact on play. "
+            f"Park run factor {rf:.0f} / HR factor {hrf:.0f} "
+            "(100 = league average) still shape scoring environment."
+        )
+    elif is_retractable:
+        weather_park_impact = (
+            f"Retractable-roof stadium — weather impact depends on roof position. "
+            f"Park run factor {rf:.0f} / HR factor {hrf:.0f} apply regardless."
+        )
     elif weather.get("temp_f") is not None:
         temp = weather["temp_f"]
         wind = weather.get("wind_speed_mph") or 0
         if wp_edge == "hitter_friendly":
             weather_park_impact = (
-                f"Conditions ({temp:.0f}°F, {wind:.0f} mph wind) and park factors "
-                "project as hitter-friendly."
+                f"Conditions ({temp:.0f}°F, {wind:.0f} mph wind) combine with "
+                f"the park (run factor {rf:.0f}, HR factor {hrf:.0f}) to favour hitters."
             )
         elif wp_edge == "pitcher_friendly":
             weather_park_impact = (
-                f"Conditions ({temp:.0f}°F, {wind:.0f} mph wind) and park factors "
-                "project as pitcher-friendly."
+                f"Conditions ({temp:.0f}°F, {wind:.0f} mph wind) combine with "
+                f"the park (run factor {rf:.0f}, HR factor {hrf:.0f}) to favour pitchers."
             )
         else:
             weather_park_impact = (
-                f"Weather ({temp:.0f}°F, {wind:.0f} mph wind) projects as "
-                "neutral for scoring."
+                f"Park (run factor {rf:.0f}, HR factor {hrf:.0f}) and "
+                f"weather ({temp:.0f}°F, {wind:.0f} mph wind) project as neutral overall."
             )
     elif park.get("available"):
-        hf  = park.get("hit_factor") or 100
-        hrf = park.get("hr_factor")  or 100
         weather_park_impact = (
-            f"Weather unavailable. Park factors: hit {hf:.0f}, HR {hrf:.0f} "
+            f"Weather unavailable. Park run factor {rf:.0f}, HR factor {hrf:.0f} "
             "(100 = league average)."
         )
     else:
@@ -1009,10 +1163,10 @@ def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknow
     if pitch_edge == "away" and ap_name != "TBD":
         reasons_away.append(f"{ap_name} projects as the stronger starter by xERA.")
     if off_edge == "away":
-        reasons_away.append(f"The offensive projection model favors {away_abbr}.")
+        reasons_away.append(f"{away_abbr} has the offensive edge by projected hit counts.")
     if not reasons_away:
         reasons_away.append(
-            f"The model does not give {away_abbr} a clear statistical edge today."
+            f"No clear statistical edge for {away_abbr} today — this is a tough spot."
         )
 
     if home_avail and home_yes > away_yes:
@@ -1022,10 +1176,10 @@ def _build_local_fallback(ctx: dict, model_name: str, parse_error: str = "unknow
     if pitch_edge == "home" and hp_name != "TBD":
         reasons_home.append(f"{hp_name} projects as the stronger starter by xERA.")
     if off_edge == "home":
-        reasons_home.append(f"The offensive projection model favors {home_abbr}.")
+        reasons_home.append(f"{home_abbr} has the offensive edge by projected hit counts.")
     if not reasons_home:
         reasons_home.append(
-            f"The model does not give {home_abbr} a clear statistical edge today."
+            f"No clear statistical edge for {home_abbr} today — this is a tough spot."
         )
 
     # ── Data caveats ──────────────────────────────────────────────────────────
@@ -1200,47 +1354,91 @@ def _build_game_prompt(ctx: dict) -> str:
         lines.append("")
 
     # ── Weather & Park ────────────────────────────────────────────────────────
-    if weather.get("is_dome"):
-        lines.append("VENUE: Indoor stadium — weather has little to no impact on play.")
+    is_dome        = weather.get("is_dome",        False)
+    is_retractable = weather.get("is_retractable", False)
+
+    # Park factor block — always present from static dataset
+    def _park_block() -> list[str]:
+        out: list[str] = []
+        if not park.get("available"):
+            out.append(f"PARK FACTORS — {venue}: data unavailable; using league-average neutral values.")
+            return out
+
+        rf  = park.get("run_factor")
+        hrf = park.get("hr_factor")
+        hf  = park.get("hit_factor")
+        lhb = park.get("lhb_hr_factor")
+        rhb = park.get("rhb_hr_factor")
+        notes = park.get("tendency_notes", "")
+
+        parts: list[str] = []
+        if rf  is not None: parts.append(f"run factor {rf:.0f}")
+        if hrf is not None: parts.append(f"HR factor {hrf:.0f}")
+        if hf  is not None: parts.append(f"hit factor {hf:.0f}")
+
+        out.append(
+            f"PARK FACTORS — {venue}: "
+            + ", ".join(parts)
+            + " (100 = league average; >100 = hitter-friendly)"
+        )
+
+        if lhb is not None or rhb is not None:
+            splits = []
+            if lhb: splits.append(f"LHB HR {lhb:.0f}")
+            if rhb: splits.append(f"RHB HR {rhb:.0f}")
+            out.append(f"  Handedness splits: {', '.join(splits)}")
+
+        if notes:
+            out.append(f"  Park tendency: {notes}")
+
+        return out
+
+    if is_dome:
+        lines.append(
+            "VENUE: Fully enclosed indoor stadium — weather has no impact on play. "
+            "Park dimensions and run/HR factors still influence scoring."
+        )
+        lines.append("")
+        lines.extend(_park_block())
+    elif is_retractable:
+        lines.append(
+            "VENUE: Retractable-roof stadium — roof status affects weather impact. "
+            "Park dimensions and run/HR factors still apply regardless of roof position."
+        )
+        lines.append("")
+        if weather.get("temp_f") is not None:
+            lines.append("WEATHER (outdoor conditions if roof is open):")
+            _stat(lines, "Temperature",    weather.get("temp_f"),             fmt=".0f", unit="°F")
+            _stat(lines, "Wind",           weather.get("wind_speed_mph"),     fmt=".0f", unit=" mph")
+            _stat(lines, "Conditions",     weather.get("condition_text"))
+        else:
+            lines.append("WEATHER: unavailable (roof status unknown)")
+        lines.append("")
+        lines.extend(_park_block())
     elif weather.get("temp_f") is not None:
         lines.append("WEATHER:")
-        _stat(lines, "Temperature",  weather.get("temp_f"),           fmt=".0f", unit="°F")
-        _stat(lines, "Wind",         weather.get("wind_speed_mph"),   fmt=".0f", unit=" mph")
+        _stat(lines, "Temperature",  weather.get("temp_f"),             fmt=".0f", unit="°F")
+        _stat(lines, "Wind",         weather.get("wind_speed_mph"),     fmt=".0f", unit=" mph")
         _stat(lines, "Wind dir",     weather.get("wind_direction_deg"), fmt=".0f", unit="°")
         _stat(lines, "Conditions",   weather.get("condition_text"))
-        _stat(lines, "Cloud cover",  weather.get("cloud_cover_pct"),  fmt=".0f", unit="%")
+        _stat(lines, "Cloud cover",  weather.get("cloud_cover_pct"),    fmt=".0f", unit="%")
         if weather.get("precipitation_mm", 0) > 0:
             _stat(lines, "Precipitation", weather.get("precipitation_mm"), fmt=".1f", unit=" mm")
-
         lines.append("")
-        if park.get("available"):
-            hf  = park.get("hit_factor")
-            hrf = park.get("hr_factor")
-            lines.append(
-                f"PARK FACTORS — {venue}: hit factor {hf:.0f}, HR factor {hrf:.0f} "
-                "(100 = league average; >100 = hitter-friendly)"
-            )
-        else:
-            lines.append("PARK FACTORS: unavailable")
+        lines.extend(_park_block())
     else:
         lines.append("WEATHER: unavailable")
         lines.append("")
-        if park.get("available"):
-            hf  = park.get("hit_factor")
-            hrf = park.get("hr_factor")
-            lines.append(
-                f"PARK FACTORS — {venue}: hit factor {hf:.0f}, HR factor {hrf:.0f} "
-                "(100 = league average; >100 = hitter-friendly)"
-            )
-        else:
-            lines.append("PARK FACTORS: unavailable")
+        lines.extend(_park_block())
 
     # ── Data availability summary ─────────────────────────────────────────────
     lines.append("")
     lines.append("DATA AVAILABILITY SUMMARY (base your response strictly on what is 'yes' below):")
+    park_status = "yes" if avail.get("park_factors") else "UNAVAILABLE"
+    if avail.get("park_factors") and avail.get("park_source") == "neutral_fallback":
+        park_status = "yes (neutral fallback — treat all factors as 100)"
     for key, label in [
         ("standings",    "Team records/streaks"),
-        ("park_factors", "Park hit/HR factors"),
         ("weather",      "Weather conditions"),
         ("home_lineup",  "Home team lineup projections"),
         ("away_lineup",  "Away team lineup projections"),
@@ -1248,6 +1446,7 @@ def _build_game_prompt(ctx: dict) -> str:
     ]:
         status = "yes" if avail.get(key) else "UNAVAILABLE"
         lines.append(f"  {label}: {status}")
+    lines.append(f"  Park run/HR factors: {park_status}")
 
     lines.append("")
     lines.append("NOT PROVIDED (never mention or infer these):")
@@ -1262,10 +1461,10 @@ def _build_game_prompt(ctx: dict) -> str:
         "=" * 60,
         "Respond with exactly this JSON structure (no markdown, no extra keys):",
         "{",
-        '  "summary": "2-3 sentences: the core narrative of this matchup. Mention both pitchers and which offense looks stronger per the model.",',
-        '  "pitching_edge": "1-2 sentences. Explain WHY the model edge exists — describe the pitcher\'s profile (not raw numbers). If edge is neutral/mixed, say so honestly.",',
+        '  "summary": "2-3 sentences: the core narrative of this matchup written in an analyst voice. Mention both pitchers and which offense looks stronger. Never say \'the model\' or \'the model projects\'.",',
+        '  "pitching_edge": "1-2 sentences. Describe WHY one pitcher has the edge — use their profile and key metrics, not raw numbers. If edge is neutral or mixed, say so honestly. Never say \'the model gives\'.",',
         '  "offensive_edge": "1-2 sentences. Compare the offenses qualitatively. Reference YES pick counts and top names if helpful.",',
-        '  "weather_park_impact": "1 sentence. For domes: say weather has little to no impact. For unavailable park factors: explicitly say park data is unavailable. Otherwise describe the environment\'s likely effect on scoring.",',
+        '  "weather_park_impact": "1-2 sentences. For fully enclosed domes: acknowledge weather has no impact but note the park\'s run/HR factors. For retractable roofs: note weather impact depends on roof status but park dimensions still apply. For outdoor parks: describe how the weather and park environment combine to affect scoring. Never say park factors are unavailable — they are always provided above.",',
         '  "reasons_away_could_win": ["up to 3 specific reasons grounded in the data — each reason one sentence"],',
         '  "reasons_home_could_win": ["up to 3 specific reasons grounded in the data — each reason one sentence"],',
         '  "data_caveats": ["one item per data section that was unavailable — skip this list if all key data was available"]',

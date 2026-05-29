@@ -391,7 +391,7 @@ def api_prop_explain(player_id: int, prop_type: str):
     if err_response is not None:
         return err_response
 
-    gemini_cache_key = f"gemini_explain_{player_id}_{prop_type}_{date_str}"
+    gemini_cache_key = f"gemini_explain_{player_id}_{prop_type}_{date_str}_{gemini_service.PROP_ANALYSIS_CACHE_VERSION}"
     explanation = gemini_service.explain_prop(
         ctx,
         cache=_cache,
@@ -449,7 +449,7 @@ def api_game_explain(game_pk: int):
         date_str        = date_str,
     )
 
-    gemini_cache_key = f"gemini_game_{game_pk}_{date_str}"
+    gemini_cache_key = f"gemini_game_{game_pk}_{date_str}_{gemini_service.GAME_ANALYSIS_CACHE_VERSION}"
     breakdown = gemini_service.explain_game(
         ctx,
         cache=_cache,
