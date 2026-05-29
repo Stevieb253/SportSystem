@@ -129,12 +129,12 @@
 <!-- ════════════════════════════════════════════════
      BULLPEN & PITCHING CONTEXT
 ════════════════════════════════════════════════ -->
-{% set home_bp = game_ctx.get('bullpen', {}).get('home', {}) %}
-{% set away_bp = game_ctx.get('bullpen', {}).get('away', {}) %}
+{% set home_bp = game_ctx.get('team_pitching', {}).get('home', {}) %}
+{% set away_bp = game_ctx.get('team_pitching', {}).get('away', {}) %}
 {% if home_bp.get('available') or away_bp.get('available') %}
 <div class="section-card">
-  <h2 class="section-title">Pitching Context
-    <span class="section-subtitle">Team season totals (starters + bullpen combined) · Saves &amp; blown saves are reliever-specific</span>
+  <h2 class="section-title">Pitching Staff Context
+    <span class="section-subtitle">Team season totals · ERA &amp; WHIP cover full staff · Saves, holds &amp; blown saves are reliever-only</span>
   </h2>
 
   {% set edges = game_ctx.get('edges', {}) %}
@@ -226,6 +226,9 @@
   {% endif %}
 
   {# ── Weather ── #}
+  {% if w.get('fetched_at') %}
+  <p class="gd-weather-ts">Weather as of {{ w.fetched_at[:16] | replace('T', ' ') }} UTC · refreshes with lineup updates</p>
+  {% endif %}
   {% if w.get('is_dome') %}
   <p class="dome-note">Indoor stadium — weather has no impact on the game.</p>
   {% else %}

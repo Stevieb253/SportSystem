@@ -176,8 +176,8 @@ def build_game_context(
         "weather": weather_ctx,
         "park":    park_ctx,
 
-        "team_form": {"home": home_form, "away": away_form},
-        "bullpen":   {"home": home_bullpen, "away": away_bullpen},
+        "team_form":    {"home": home_form, "away": away_form},
+        "team_pitching": {"home": home_bullpen, "away": away_bullpen},
 
         "data_availability": data_availability,
 

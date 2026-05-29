@@ -131,17 +131,28 @@ def get_stadium_weather(stadium_name: str) -> Weather:
             cloud_cover_pct=0,
         )
 
+    # Weather is cached with a 1-hour TTL so the model always uses data that is
+    # at most ~1 hour old on its next rebuild (which happens every ~2 h today).
+    _WEATHER_CACHE_TTL_HOURS = 1.0
+
     cache_key = f"weather_{stadium_name.replace(' ', '_')}"
     if _cache:
-        cached = _cache.get(cache_key)
+        cached = _cache.get(cache_key, ttl_hours=_WEATHER_CACHE_TTL_HOURS)
         if cached is not None:
+            # Restore the original fetch time from the cached dict so downstream
+            # code (and the game detail template) can show an accurate timestamp.
+            raw_fetched = cached.get("fetched_at")
+            try:
+                fetched_at = datetime.fromisoformat(raw_fetched) if raw_fetched else datetime.utcnow()
+            except (ValueError, TypeError):
+                fetched_at = datetime.utcnow()
             return Weather(
                 stadium=stadium_name,
                 temp_f=cached.get("temp_f", _DEFAULT_TEMP_F),
                 wind_speed_mph=cached.get("wind_speed_mph", _DEFAULT_WIND_MPH),
                 wind_direction_deg=cached.get("wind_direction_deg", _DEFAULT_WIND_DEG),
                 condition_code=cached.get("condition_code", _DEFAULT_CONDITION),
-                fetched_at=datetime.utcnow(),
+                fetched_at=fetched_at,
                 is_dome=False,
                 condition_text=cached.get("condition_text", "Unknown"),
                 precipitation_mm=cached.get("precipitation_mm", 0.0),
@@ -175,13 +186,15 @@ def get_stadium_weather(stadium_name: str) -> Weather:
 
     if _cache:
         _cache.set(cache_key, {
-            "temp_f":            weather.temp_f,
-            "wind_speed_mph":    weather.wind_speed_mph,
+            "temp_f":             weather.temp_f,
+            "wind_speed_mph":     weather.wind_speed_mph,
             "wind_direction_deg": weather.wind_direction_deg,
-            "condition_code":    weather.condition_code,
-            "condition_text":    weather.condition_text,
-            "precipitation_mm":  weather.precipitation_mm,
-            "cloud_cover_pct":   weather.cloud_cover_pct,
+            "condition_code":     weather.condition_code,
+            "condition_text":     weather.condition_text,
+            "precipitation_mm":   weather.precipitation_mm,
+            "cloud_cover_pct":    weather.cloud_cover_pct,
+            # Store the actual fetch time so cache reads can restore it accurately
+            "fetched_at":         weather.fetched_at.isoformat(),
         })
 
     return weather

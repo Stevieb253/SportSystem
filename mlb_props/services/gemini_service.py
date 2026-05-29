@@ -1228,8 +1228,8 @@ def _build_game_prompt(ctx: dict) -> str:
     avail    = ctx.get("data_availability") or {}
     edges    = ctx.get("edges") or {}
     kp       = ctx.get("key_players") or {}
-    team_form = ctx.get("team_form") or {}
-    bullpen   = ctx.get("bullpen") or {}
+    team_form    = ctx.get("team_form") or {}
+    team_pitching = ctx.get("team_pitching") or {}
 
     home_name  = home.get("name", "Home Team")
     away_name  = away.get("name", "Away Team")
@@ -1308,9 +1308,9 @@ def _build_game_prompt(ctx: dict) -> str:
     else:
         lines.append("TEAM RECORDS: unavailable")
 
-    # ── Bullpen / Team Pitching ────────────────────────────────────────────────
-    home_bp = bullpen.get("home") or {}
-    away_bp = bullpen.get("away") or {}
+    # ── Team Pitching Staff Context ────────────────────────────────────────────
+    home_bp = team_pitching.get("home") or {}
+    away_bp = team_pitching.get("away") or {}
     if avail.get("team_pitching") and (home_bp.get("available") or away_bp.get("available")):
         lines.append("")
         lines.append(
