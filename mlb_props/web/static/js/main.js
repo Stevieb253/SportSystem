@@ -180,14 +180,23 @@ function _setActiveMatchupPill(tab, matchup) {
 
 function _buildMatchupPills(tab) {
   var bar = document.getElementById(tab + '-matchup-bar');
-  if (!bar) return;
+  console.log('[matchup] _buildMatchupPills("' + tab + '") — bar:', bar,
+              '| MLB_GAMES length:', (window.MLB_GAMES || []).length);
+
+  if (!bar) {
+    console.warn('[matchup] bar element not found for tab:', tab);
+    return;
+  }
 
   var games = (window.MLB_GAMES || []).filter(function(g) {
     return g.away_abbr && g.home_abbr;
   });
 
+  console.log('[matchup] games after filter:', games.length, '| raw MLB_GAMES:', (window.MLB_GAMES || []).length);
+
   // Hide the bar entirely if there are no games (e.g. lineup data not yet loaded)
   if (!games.length) {
+    console.warn('[matchup] No valid games — hiding bar for tab:', tab);
     bar.style.display = 'none';
     return;
   }
@@ -246,6 +255,10 @@ function _buildMatchupPills(tab) {
 
   html += '</div>';
   bar.innerHTML = html;
+
+  var pillCount = bar.querySelectorAll('.mf-pill').length;
+  console.log('[matchup] Pills rendered for "' + tab + '":', pillCount,
+              '(including All Games pill)');
 }
 
 // ── Populate team dropdowns from row data ─────────────────────────────────────
@@ -270,9 +283,9 @@ function _populateTeamDropdown(tab, selector) {
 _populateTeamDropdown('hit', '#hit-table tbody tr');
 _populateTeamDropdown('hr',  '#hr-grid .hr-card');
 
-// Build matchup pill bars from page-embedded game data
-_buildMatchupPills('hit');
-_buildMatchupPills('hr');
+// NOTE: _buildMatchupPills() is called from index.html's extra_js block
+// AFTER window.MLB_GAMES is defined. Calling it here would be too early
+// because main.js loads before the extra_js block runs.
 
 // ── Legacy wrappers (kept so any inline onclick still works) ──────────────────
 function filterTable(tableId, verdict, btn) {
