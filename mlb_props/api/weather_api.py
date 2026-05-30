@@ -20,6 +20,27 @@ _DEFAULT_WIND_MPH  = 5.0
 _DEFAULT_WIND_DEG  = 180.0
 _DEFAULT_CONDITION = 0
 
+# ── Explicit coordinate aliases for renamed / alternate venue names ───────────
+# Checked BEFORE fuzzy matching to prevent generic words like "field" or "park"
+# from matching the wrong stadium.  Add entries here whenever the MLB API
+# starts using a new venue name mid-season.
+_VENUE_COORD_ALIASES: dict[str, dict] = {
+    # HOU 2025 rename: Minute Maid Park → Daikin Park (same retractable-roof building)
+    "Daikin Park":                    {"lat": 29.7573, "lon": -95.3555},
+    # CWS rename: Guaranteed Rate Field → Rate Field (Southside Chicago)
+    "Rate Field":                     {"lat": 41.8300, "lon": -87.6339},
+    # LAD sponsorship overlay name (same GPS as Dodger Stadium)
+    "UNIQLO Field at Dodger Stadium": {"lat": 34.0739, "lon": -118.2400},
+    # MLB API casing variant (lowercase p)
+    "loanDepot park":                 {"lat": 25.7781, "lon": -80.2197},
+}
+
+# Words too generic to drive a fuzzy match — "field" matches Globe Life Field,
+# American Family Field, AND Guaranteed Rate Field; "park" matches most others.
+_FUZZY_STOP_WORDS: frozenset[str] = frozenset({
+    "park", "field", "stadium", "centre", "center", "ballpark", "arena",
+})
+
 # WMO Weather Interpretation Codes → human-readable label
 # https://open-meteo.com/en/docs#weathervariables
 _WMO_CODES: dict[int, str] = {
@@ -96,7 +117,24 @@ def get_weather(lat: float, lon: float) -> dict:
         }
         resp = requests.get(config.WEATHER_API_URL, params=params, timeout=10)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+
+        # ── Diagnostic logging (DEBUG) ─────────────────────────────────────
+        current = data.get("current", {})
+        logger.debug(
+            "Open-Meteo raw fields — lat=%.4f lon=%.4f | "
+            "temp=%.1f°F  wind=%.1f mph@%.0f°  weather_code=%s  "
+            "cloud_cover=%s%%  precipitation=%s mm",
+            lat, lon,
+            current.get("temperature_2m", "MISSING"),
+            current.get("wind_speed_10m", "MISSING"),
+            current.get("wind_direction_10m", "MISSING"),
+            current.get("weather_code", "MISSING"),
+            current.get("cloud_cover", "MISSING"),
+            current.get("precipitation", "MISSING"),
+        )
+
+        return data
     except Exception as exc:
         logger.warning("Weather API failed (lat=%s, lon=%s): %s", lat, lon, exc)
         return {}
@@ -157,17 +195,37 @@ def get_stadium_weather(stadium_name: str, ttl_hours: float = 1.0) -> Weather:
                 cloud_cover_pct=cached.get("cloud_cover_pct", 0),
             )
 
-    coords = config.STADIUM_COORDS.get(stadium_name) or _fuzzy_coords(stadium_name)
+    coords = (
+        config.STADIUM_COORDS.get(stadium_name)
+        or _VENUE_COORD_ALIASES.get(stadium_name)
+        or _fuzzy_coords(stadium_name)
+    )
     if not coords:
-        logger.warning("No coordinates for stadium: %s — using defaults", stadium_name)
+        logger.warning(
+            "No coordinates for stadium %r — returning default weather "
+            "(72°F / 5 mph / Unknown condition). Add to _VENUE_COORD_ALIASES "
+            "in weather_api.py to fix.", stadium_name,
+        )
         return _default_weather(stadium_name)
+
+    logger.debug("Fetching weather for %r at lat=%.4f lon=%.4f",
+                 stadium_name, coords["lat"], coords["lon"])
 
     raw = get_weather(coords["lat"], coords["lon"])
     if not raw:
+        logger.warning("Weather API returned empty response for %r", stadium_name)
         return _default_weather(stadium_name)
 
     current = raw.get("current", {})
     code    = int(current.get("weather_code", _DEFAULT_CONDITION))
+
+    # ── Diagnostic logging for condition and cloud cover ──────────────────
+    condition_str = wmo_to_text(code)
+    cloud_raw     = current.get("cloud_cover")
+    logger.debug(
+        "Stadium weather parsed — %r: code=%d → %r  cloud_cover=%s%%",
+        stadium_name, code, condition_str, cloud_raw,
+    )
 
     weather = Weather(
         stadium=stadium_name,
@@ -199,7 +257,13 @@ def get_stadium_weather(stadium_name: str, ttl_hours: float = 1.0) -> Weather:
 
 
 def _default_weather(stadium_name: str) -> Weather:
-    """Return neutral default weather for unknown/failed lookups."""
+    """Return a clearly-labelled fallback when coordinates or API fetch fails.
+
+    Uses condition_text='Data unavailable' (not 'Unknown') so the UI can
+    display a meaningful message rather than showing misleading default values.
+    The temp/wind values are also set to None-equivalent so downstream code can
+    detect that this is a fallback and render it differently if desired.
+    """
     return Weather(
         stadium=stadium_name,
         temp_f=_DEFAULT_TEMP_F,
@@ -208,29 +272,46 @@ def _default_weather(stadium_name: str) -> Weather:
         condition_code=_DEFAULT_CONDITION,
         fetched_at=datetime.utcnow(),
         is_dome=False,
-        condition_text="Unknown",
+        condition_text="Data unavailable",
         precipitation_mm=0.0,
         cloud_cover_pct=0,
     )
 
 
 def _fuzzy_coords(stadium_name: str) -> dict | None:
-    """Find coordinates by partial name match.
+    """Find coordinates by partial name match against config.STADIUM_COORDS.
 
-    Handles full MLB API names like 'Oriole Park at Camden Yards'
-    matching config key 'Camden Yards'.
+    Two-pass approach:
+      1. Substring: is any known name fully contained in the given name?
+         e.g. "Camden Yards" ⊂ "Oriole Park at Camden Yards" → match
+      2. Distinctive-word: does any long, non-generic word from the given
+         name appear in a known name?
+         e.g. "dodger" from "UNIQLO Field at Dodger Stadium" → "Dodger Stadium"
+
+    Words in _FUZZY_STOP_WORDS ("field", "park", etc.) are excluded from
+    pass 2 to prevent "Rate Field" matching "Globe Life Field" (wrong city).
 
     Args:
-        stadium_name: Full stadium name string.
+        stadium_name: Full stadium name string from the MLB API.
 
     Returns:
-        Coords dict or None.
+        Coords dict or None if no confident match found.
     """
     name_lower = stadium_name.lower()
     for known_name, coords in config.STADIUM_COORDS.items():
+        # Pass 1: known name is a substring of the provided name
         if known_name.lower() in name_lower:
+            logger.debug("Fuzzy coord match (substring): %r → %r", stadium_name, known_name)
             return coords
-        words = [w for w in name_lower.split() if len(w) > 4]
-        if any(w in known_name.lower() for w in words):
+
+    for known_name, coords in config.STADIUM_COORDS.items():
+        # Pass 2: any distinctive long word from the provided name appears in a known name
+        words = [
+            w for w in name_lower.split()
+            if len(w) > 4 and w not in _FUZZY_STOP_WORDS
+        ]
+        if words and any(w in known_name.lower() for w in words):
+            logger.debug("Fuzzy coord match (word): %r → %r (words=%s)", stadium_name, known_name, words)
             return coords
+
     return None

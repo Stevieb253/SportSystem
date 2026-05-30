@@ -163,6 +163,7 @@ DOME_STADIUMS = {
     "Rogers Centre",
     "American Family Field",
     "Minute Maid Park",
+    "Daikin Park",          # 2025 rename of Minute Maid Park — same retractable roof
     "Globe Life Field",
 }
 
