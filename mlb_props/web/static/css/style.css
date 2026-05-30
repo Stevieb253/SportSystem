@@ -2965,3 +2965,440 @@ a { color: inherit; text-decoration: none; }
   text-align: right;
 }
 .gb-kp-verdict { flex-shrink: 0; }
+
+/* ── Game detail — "View Analysis" home-card link ──────────────────────── */
+.gc-analysis-link {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  text-align: right;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+.game-card:hover .gc-analysis-link { opacity: 1; }
+
+/* ── section-subtitle helper ─────────────────────────────────────────────── */
+.section-subtitle {
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 0.5rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   GAME DETAIL — Team Form
+══════════════════════════════════════════════════════════════ */
+
+.gd-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 560px) {
+  .gd-form-grid { grid-template-columns: 1fr; }
+}
+
+.gd-form-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 1rem;
+}
+
+.gd-form-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+}
+
+.gd-form-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.gd-form-abbr {
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  line-height: 1;
+}
+
+.gd-form-side {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: block;
+  margin-top: 0.1rem;
+}
+
+/* Streak pill — W green, L red */
+.gd-streak {
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.gd-streak-w { background: #dcfce7; color: var(--green); border: 1px solid #bbf7d0; }
+.gd-streak-l { background: #fee2e2; color: var(--red);   border: 1px solid #fecaca; }
+
+.gd-form-record {
+  font-family: var(--font-mono);
+  font-size: 1.55rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.gd-form-pct {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.gd-form-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.gd-form-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+.gd-form-stat:last-child { border-bottom: none; padding-bottom: 0; }
+.gd-form-stat-lbl { color: var(--muted); }
+.gd-form-stat-val { font-weight: 700; color: var(--text-2); }
+
+.gd-form-na {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+  padding: 0.4rem 0;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   GAME DETAIL — Pitching Edge Banner
+══════════════════════════════════════════════════════════════ */
+
+/* Edge banner — expands to show reasons list */
+.gd-edge-banner {
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  border: 1.5px solid transparent;
+}
+.gd-edge-home    { background: #eff6ff; color: var(--accent);  border-color: #bfdbfe; }
+.gd-edge-away    { background: #fff7ed; color: var(--orange);  border-color: #fed7aa; }
+.gd-edge-neutral { background: var(--surface); color: var(--muted); border-color: var(--border); }
+
+/* Top row: label · team · score */
+.gd-edge-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.gd-edge-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0.75;
+}
+.gd-edge-team {
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.gd-edge-score {
+  margin-left: auto;
+  font-size: 0.68rem;
+  font-weight: 600;
+  opacity: 0.65;
+  font-family: var(--font-mono);
+}
+
+/* Reasons list */
+.gd-edge-reasons {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid currentColor;
+  border-top-color: inherit;
+  opacity: 0.85;
+}
+.gd-edge-reason {
+  font-size: 0.76rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* Neutral/mixed description line */
+.gd-edge-desc {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   GAME DETAIL — Bullpen / Team Pitching
+══════════════════════════════════════════════════════════════ */
+
+.gd-bullpen-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 560px) {
+  .gd-bullpen-grid { grid-template-columns: 1fr; }
+}
+
+.gd-bullpen-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 1rem;
+}
+
+.gd-bullpen-team {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+}
+
+.gd-bullpen-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.gd-bp-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.83rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+.gd-bp-stat:last-child { border-bottom: none; padding-bottom: 0; }
+.gd-bp-lbl { color: var(--muted); font-size: 0.8rem; }
+.gd-bp-val { font-weight: 700; color: var(--text-2); }
+
+/* ══════════════════════════════════════════════════════════════
+   GAME DETAIL — Park & Weather Context
+══════════════════════════════════════════════════════════════ */
+
+.gd-park-row {
+  margin-bottom: 1.1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.gd-park-profile {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.gd-park-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+/* Park profile badges */
+.gd-park-badge {
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.gd-park-hitter    { background: #dcfce7; color: var(--green); border: 1px solid #bbf7d0; }
+.gd-park-pitcher   { background: #eff6ff; color: var(--accent); border: 1px solid #bfdbfe; }
+.gd-park-neutral   { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+.gd-park-dome      { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+.gd-park-retractable { background: #fef9c3; color: #92400e; border: 1px solid #fde68a; }
+
+/* Park factor chips */
+.gd-park-factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+.gd-pf-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.22rem 0.6rem;
+  font-size: 0.78rem;
+}
+.gd-pf-lbl { color: var(--muted); }
+.gd-pf-val { font-weight: 700; color: var(--text-2); }
+.gd-pf-hi  { color: var(--green) !important; }
+.gd-pf-lo  { color: var(--accent) !important; }
+.gd-pf-avg {
+  font-size: 0.63rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-left: 0.2rem;
+}
+
+.gd-park-notes {
+  font-size: 0.82rem;
+  color: var(--text-2);
+  line-height: 1.65;
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+/* Weather fetch timestamp — subtle footnote above the weather grid */
+.gd-weather-ts {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-bottom: 0.6rem;
+}
+
+/* ── Matchup Filter Bar ──────────────────────────────────────────────────── */
+/* Wrapping pill grid shown above Hit / HR table controls.                   */
+
+.mf-bar {
+  display: block;
+  padding: 0.6rem 0 0.65rem;
+  margin-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+.mf-bar[style*="display: none"],
+.mf-bar:empty { display: none !important; }
+
+/* "Filter by matchup" section heading — sits on its own line above pills */
+.mf-label {
+  display: block;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.45rem;
+}
+
+/* Pill wrapper — wraps naturally into multiple rows */
+.mf-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+/* Individual pill button */
+.mf-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.3rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, box-shadow 0.15s;
+  line-height: 1;
+}
+.mf-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.mf-pill.mf-pill-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(37,99,235,0.22);
+}
+
+/* Team logo inside pill */
+.mf-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+/* Team abbreviation text */
+.mf-abbr {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+/* "@" separator between teams */
+.mf-sep {
+  font-size: 0.62rem;
+  color: var(--muted);
+  margin: 0 1px;
+}
+.mf-pill.mf-pill-active .mf-sep {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Optional game-time hint (e.g. "7:10 PM") */
+.mf-time {
+  font-size: 0.6rem;
+  color: var(--muted);
+  margin-left: 0.15rem;
+  font-family: var(--font-mono);
+}
+.mf-pill.mf-pill-active .mf-time {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Responsive: slightly smaller pills on narrow screens; wrapping still applies */
+@media (max-width: 640px) {
+  .mf-pill { padding: 0.27rem 0.6rem; font-size: 0.72rem; }
+  .mf-logo { width: 15px; height: 15px; }
+}

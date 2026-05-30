@@ -35,7 +35,7 @@ _CACHE_TTL_HOURS = 2.0
 
 # Bump this string whenever the game-analysis prompt or context schema changes.
 # Including it in the cache key causes all old entries to miss automatically.
-GAME_ANALYSIS_CACHE_VERSION = "park_v2"
+GAME_ANALYSIS_CACHE_VERSION = "team_form_v1"
 
 # Bump whenever the prop explanation prompt or voice/style changes.
 # Including this in the cache key causes all old entries to miss automatically.
@@ -1228,6 +1228,8 @@ def _build_game_prompt(ctx: dict) -> str:
     avail    = ctx.get("data_availability") or {}
     edges    = ctx.get("edges") or {}
     kp       = ctx.get("key_players") or {}
+    team_form    = ctx.get("team_form") or {}
+    team_pitching = ctx.get("team_pitching") or {}
 
     home_name  = home.get("name", "Home Team")
     away_name  = away.get("name", "Away Team")
@@ -1246,10 +1248,13 @@ def _build_game_prompt(ctx: dict) -> str:
         "2. When a section is marked unavailable, write 'unavailable' — do NOT infer, guess, or use prior knowledge.",
         "3. NEVER recommend, suggest, or imply a bet, wager, gambling action, or side to back.",
         "4. NEVER mention injuries, illness, the injured list, or player availability — not provided.",
-        "5. NEVER mention bullpen ERAs, reliever stats, closer performance, or setup arms — not provided.",
+        "5. Only cite bullpen/reliever context if a BULLPEN section is explicitly provided below.",
         "6. NEVER reference odds, moneylines, spreads, totals, over/unders, or sportsbook lines — not provided.",
-        "7. NEVER cite team OPS, runs per game, or other team-aggregate stats not supplied below.",
+        "7. Only cite team-level aggregate stats (ERA, saves, etc.) if explicitly listed in BULLPEN or TEAM FORM sections.",
         "8. If standings are marked unavailable, do NOT state or estimate any win-loss records.",
+        "8b. STREAK WORDING: Use exactly the streak label provided (e.g. 'Won last game', '3-game win streak'). "
+        "NEVER say 'on a win streak' or 'on a losing streak' for a single-game result (W1 or L1). "
+        "NEVER say 'hot streak' or 'cold streak' from a single game. Mirror the label as given.",
         "9. Be concise and analytical. Each JSON field: 2-3 sentences max.",
         "10. Explain both teams fairly — do not simply favour one side.",
         "11. Return ONLY valid JSON matching the exact schema shown at the bottom. No markdown fences.",
@@ -1271,30 +1276,64 @@ def _build_game_prompt(ctx: dict) -> str:
         f"  Data confidence: {edges.get('confidence_tier', 'unknown')}",
     ]
 
-    # ── Team Records ──────────────────────────────────────────────────────────
+    # ── Team Records + Form ───────────────────────────────────────────────────
     lines.append("")
     if avail.get("standings"):
-        lines.append("TEAM RECORDS (season standings):")
+        lines.append("TEAM RECORDS & FORM (season standings):")
 
-        def _record_line(team: dict, label: str) -> str:
+        def _record_line(team: dict, form: dict, label: str) -> str:
             w, l = team.get("wins"), team.get("losses")
             pct  = team.get("win_pct", "")
-            stk  = team.get("streak", "")
+            # Use the human-readable streak label (e.g. "3-game win streak", "Won last game")
+            stk  = form.get("streak_label") or ""
             hw, hl = team.get("home_wins"), team.get("home_losses")
             aw, al = team.get("away_wins"), team.get("away_losses")
+            l10w   = form.get("last_ten_wins")
+            l10l   = form.get("last_ten_losses")
             parts = [f"{label}: {w}-{l} ({pct})"]
             if stk:
-                parts.append(f"streak {stk}")
+                parts.append(stk)
+            if l10w is not None:
+                parts.append(f"last 10: {l10w}-{l10l}")
             if hw is not None:
                 parts.append(f"home {hw}-{hl}")
             if aw is not None:
                 parts.append(f"away {aw}-{al}")
             return "  " + ", ".join(parts)
 
-        lines.append(_record_line(away, away_abbr))
-        lines.append(_record_line(home, home_abbr))
+        away_form_d = team_form.get("away") or {}
+        home_form_d = team_form.get("home") or {}
+        lines.append(_record_line(away, away_form_d, away_abbr))
+        lines.append(_record_line(home, home_form_d, home_abbr))
     else:
         lines.append("TEAM RECORDS: unavailable")
+
+    # ── Team Pitching Staff Context ────────────────────────────────────────────
+    home_bp = team_pitching.get("home") or {}
+    away_bp = team_pitching.get("away") or {}
+    if avail.get("team_pitching") and (home_bp.get("available") or away_bp.get("available")):
+        lines.append("")
+        lines.append(
+            "TEAM PITCHING CONTEXT (season aggregate — ERA & WHIP cover full staff; "
+            "saves, blown saves & holds are reliever-specific):"
+        )
+        for abbr, bp in [(away_abbr, away_bp), (home_abbr, home_bp)]:
+            if not bp.get("available"):
+                continue
+            parts = [f"{abbr}:"]
+            if bp.get("era") is not None:
+                parts.append(f"team ERA {bp['era']:.2f} (starters+bullpen)")
+            if bp.get("whip") is not None:
+                parts.append(f"team WHIP {bp['whip']:.2f}")
+            if bp.get("saves") is not None:
+                parts.append(f"{bp['saves']} saves (relievers)")
+            if bp.get("blown_saves") is not None:
+                parts.append(f"{bp['blown_saves']} blown saves (relievers)")
+            if bp.get("save_pct") is not None:
+                parts.append(f"save% {bp['save_pct']:.1%}")
+            if bp.get("holds") is not None:
+                parts.append(f"{bp['holds']} holds (relievers)")
+            lines.append("  " + " | ".join(parts))
 
     # ── Pitching Matchup (condensed to 4 most diagnostic stats) ───────────────
     lines.append("")
@@ -1438,11 +1477,12 @@ def _build_game_prompt(ctx: dict) -> str:
     if avail.get("park_factors") and avail.get("park_source") == "neutral_fallback":
         park_status = "yes (neutral fallback — treat all factors as 100)"
     for key, label in [
-        ("standings",    "Team records/streaks"),
-        ("weather",      "Weather conditions"),
-        ("home_lineup",  "Home team lineup projections"),
-        ("away_lineup",  "Away team lineup projections"),
-        ("pitchers",     "Starting pitcher stats"),
+        ("standings",      "Team records/streaks/L10"),
+        ("team_pitching",  "Team pitching ERA, saves, blown saves"),
+        ("weather",        "Weather conditions"),
+        ("home_lineup",    "Home team lineup projections"),
+        ("away_lineup",    "Away team lineup projections"),
+        ("pitchers",       "Starting pitcher stats"),
     ]:
         status = "yes" if avail.get(key) else "UNAVAILABLE"
         lines.append(f"  {label}: {status}")
@@ -1450,10 +1490,11 @@ def _build_game_prompt(ctx: dict) -> str:
 
     lines.append("")
     lines.append("NOT PROVIDED (never mention or infer these):")
-    lines.append("  Bullpen/reliever ERAs or stats")
+    lines.append("  Reliever-specific ERA (only team-aggregate ERA and save totals are provided)")
+    lines.append("  Individual closer/setup arm names or stats")
     lines.append("  Injuries, IL status, player availability")
     lines.append("  Sportsbook odds, moneylines, spreads, or totals")
-    lines.append("  Team OPS, runs per game, wRC+, or other aggregate team stats")
+    lines.append("  Team OPS, wRC+, runs per game, or offensive metrics not listed above")
 
     # ── Output schema ─────────────────────────────────────────────────────────
     lines += [

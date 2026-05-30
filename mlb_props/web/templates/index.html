@@ -159,6 +159,9 @@
         </div>
         {% endfor %}
       </div>
+
+      <!-- View Analysis link -->
+      <div class="gc-analysis-link">View Analysis →</div>
     </a>
     {% endfor %}
   </div>
@@ -171,11 +174,13 @@
      TAB 2 — HIT PROBABILITY
 ════════════════════════════════════════════════ -->
 <div id="tab-hits" class="tab-content">
+  <!-- Matchup filter pill row -->
+  <div id="hit-matchup-bar" class="mf-bar"></div>
   <div class="table-controls">
     <!-- Row 1: search + team -->
     <div class="tc-row">
       <input type="text" id="hit-search" class="search-input" placeholder="Search player..." oninput="applyFilters('hit')" />
-      <select id="hit-team" class="filter-select" onchange="applyFilters('hit')">
+      <select id="hit-team" class="filter-select" onchange="onTeamDropdownChange('hit')">
         <option value="">All Teams</option>
       </select>
     </div>
@@ -272,7 +277,9 @@
             data-team="{{ pdict.get('team', '') }}"
             data-hand="{{ pdict.get('hand', 'R') }}"
             data-pos="{{ pdict.get('lineup_position', 0) }}"
-            data-prob="{{ (prob * 100)|round|int }}">
+            data-prob="{{ (prob * 100)|round|int }}"
+            data-game-away="{{ away_abbr }}"
+            data-game-home="{{ home_abbr }}">
           <td>
             <div class="player-cell">
               <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E" class="player-headshot" alt="{{ pdict.get('name', '') }}" data-real="{{ pdict.get('player_id', 0) | mlb_photo }}" />
@@ -406,10 +413,12 @@
      TAB 3 — HOME RUNS
 ════════════════════════════════════════════════ -->
 <div id="tab-hrs" class="tab-content">
+  <!-- Matchup filter pill row -->
+  <div id="hr-matchup-bar" class="mf-bar"></div>
   <div class="table-controls">
     <div class="tc-row">
       <input type="text" id="hr-search" class="search-input" placeholder="Search player..." oninput="applyFilters('hr')" />
-      <select id="hr-team" class="filter-select" onchange="applyFilters('hr')">
+      <select id="hr-team" class="filter-select" onchange="onTeamDropdownChange('hr')">
         <option value="">All Teams</option>
       </select>
     </div>
@@ -446,19 +455,23 @@
   {% if model.get('hr_probabilities') %}
   <div class="hr-grid" id="hr-grid">
     {% for r in model.hr_probabilities %}
-    {% set pdict   = r.get('player', {}) %}
-    {% set gdict   = r.get('game', {}) %}
-    {% set vpdict  = r.get('vs_pitcher', {}) %}
-    {% set prob    = r.get('hr_probability', 0) %}
-    {% set verdict = r.get('hr_verdict', 'NO') %}
-    {% set odds_str = r.get('odds', '') %}
-    {% set edge    = r.get('value_edge', 0) %}
+    {% set pdict      = r.get('player', {}) %}
+    {% set gdict      = r.get('game', {}) %}
+    {% set vpdict     = r.get('vs_pitcher', {}) %}
+    {% set prob       = r.get('hr_probability', 0) %}
+    {% set verdict    = r.get('hr_verdict', 'NO') %}
+    {% set odds_str   = r.get('odds', '') %}
+    {% set edge       = r.get('value_edge', 0) %}
+    {% set hr_away    = gdict.get('away_team', {}).get('abbreviation', '') %}
+    {% set hr_home    = gdict.get('home_team', {}).get('abbreviation', '') %}
 
     <div class="hr-card {% if verdict == 'YES' %}hr-card-yes{% endif %}"
          data-verdict="{{ verdict }}"
          data-team="{{ pdict.get('team', '') }}"
          data-hand="{{ pdict.get('hand', 'R') }}"
-         data-pos="{{ pdict.get('lineup_position', 0) }}">
+         data-pos="{{ pdict.get('lineup_position', 0) }}"
+         data-game-away="{{ hr_away }}"
+         data-game-home="{{ hr_home }}">
       <div class="hr-card-header">
         <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Ccircle cx='30' cy='30' r='30' fill='%23232830'/%3E%3Ccircle cx='30' cy='23' r='11' fill='%234a5060'/%3E%3Cellipse cx='30' cy='52' rx='19' ry='14' fill='%234a5060'/%3E%3C/svg%3E" class="hr-headshot" alt="{{ pdict.get('name', '') }}" data-real="{{ pdict.get('player_id', 0) | mlb_photo }}" />
         <div>
@@ -783,6 +796,25 @@
 {% endblock %}
 
 {% block extra_js %}
+<script>
+  // ── Game data for matchup filter pills ────────────────────────────────────
+  // Injected at render time so the JS pill builder doesn't need an extra fetch.
+  window.MLB_GAMES = [
+    {% for g in model.get('games', []) %}
+    {
+      away_abbr: {{ g.get('away_team', {}).get('abbreviation', '') | tojson }},
+      home_abbr: {{ g.get('home_team', {}).get('abbreviation', '') | tojson }},
+      away_logo: {{ g.get('away_team', {}).get('abbreviation', '') | team_logo | tojson }},
+      home_logo: {{ g.get('home_team', {}).get('abbreviation', '') | team_logo | tojson }},
+      game_time: {{ g.get('game_time_local', '') | tojson }},
+    },
+    {% endfor %}
+  ];
+  // Build matchup pill bars NOW — MLB_GAMES is defined and DOM is ready.
+  // (Cannot be done in main.js because main.js loads before this block runs.)
+  _buildMatchupPills('hit');
+  _buildMatchupPills('hr');
+</script>
 <script>
   // ── Matchup notes — lag-free toggle + async BvP loader ───────────────────
   // Hit-table notes: absolutely-positioned popover (zero table reflow).

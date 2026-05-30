@@ -60,27 +60,59 @@ def build_game_context(
     home_id   = home.get("id", 0)
     away_id   = away.get("id", 0)
 
+    # ── Fresh weather lookup (30-min TTL, independent of the model cache) ─────
+    # The game dict carries weather baked in at model-build time (up to 2h old).
+    # Re-fetching here with a short TTL gives the game detail page current data
+    # without requiring a full model rebuild.
+    venue_name_for_wx = v.get("name", "")
+    if venue_name_for_wx:
+        try:
+            from api import weather_api as _weather_api
+            fresh = _weather_api.get_stadium_weather(venue_name_for_wx, ttl_hours=0.5)
+            if fresh is not None:
+                fresh_dict = _to_dict(fresh)
+                if fresh_dict.get("temp_f") is not None or fresh_dict.get("is_dome"):
+                    w = fresh_dict  # override model snapshot with fresh data
+                    logger.debug(
+                        "build_game_context: using fresh weather for '%s' (fetched_at=%s)",
+                        venue_name_for_wx,
+                        fresh_dict.get("fetched_at", "?"),
+                    )
+        except Exception as exc:
+            logger.debug("build_game_context: fresh weather fetch failed ('%s'): %s", venue_name_for_wx, exc)
+            # Fall through — use the model's baked-in weather
+
     # ── Split results by team ──────────────────────────────────────────────────
     home_hit = [r for r in hit_results if _player_team(r) == home_abbr]
     away_hit = [r for r in hit_results if _player_team(r) == away_abbr]
     home_hr  = [r for r in hr_results  if _player_team(r) == home_abbr]
     away_hr  = [r for r in hr_results  if _player_team(r) == away_abbr]
 
-    # ── Standings ──────────────────────────────────────────────────────────────
+    # ── Standings + team pitching ──────────────────────────────────────────────
     standings = {}
+    home_pitching_stats: dict = {}
+    away_pitching_stats: dict = {}
     if mlb_api and date_str:
+        season = int(date_str[:4])
         try:
-            season = int(date_str[:4])
             raw = mlb_api.get_standings(season) or {}
             standings = _parse_standings(raw)
         except Exception as exc:
             logger.warning("Standings fetch failed in game_context_service: %s", exc)
+        home_pitching_stats = _fetch_team_pitching(home_id, mlb_api, season)
+        away_pitching_stats = _fetch_team_pitching(away_id, mlb_api, season)
 
     home_record = standings.get(home_id) or standings.get(str(home_id)) or {}
     away_record = standings.get(away_id) or standings.get(str(away_id)) or {}
 
     # ── Park factors ───────────────────────────────────────────────────────────
     park_ctx = _get_park_ctx(v.get("name", ""), park_factors_df, home_abbr)
+
+    # ── Team form & bullpen ────────────────────────────────────────────────────
+    home_form    = _team_form(home_record)
+    away_form    = _team_form(away_record)
+    home_bullpen = _bullpen_ctx(home_pitching_stats)
+    away_bullpen = _bullpen_ctx(away_pitching_stats)
 
     # ── Aggregate offensive projections ───────────────────────────────────────
     home_offense = _aggregate_offense(home_hit, home_hr)
@@ -111,6 +143,7 @@ def build_game_context(
         "home_lineup":  len(home_hit) > 0,
         "away_lineup":  len(away_hit) > 0,
         "pitchers":     bool(hp.get("name") or ap.get("name")),
+        "team_pitching": bool(home_bullpen.get("available") or away_bullpen.get("available")),
     }
 
     # ── Edges (computed after all data is ready) ───────────────────────────────
@@ -165,6 +198,9 @@ def build_game_context(
         "weather": weather_ctx,
         "park":    park_ctx,
 
+        "team_form":    {"home": home_form, "away": away_form},
+        "team_pitching": {"home": home_bullpen, "away": away_bullpen},
+
         "data_availability": data_availability,
 
         "edges": edges,
@@ -184,8 +220,12 @@ def _compute_edges(
     data_availability: dict,
 ) -> dict:
     """Compute edge labels from structured data."""
+    pitch_edge, pitch_score, pitch_metrics, pitch_reasons = _pitching_edge(hp, ap)
     return {
-        "starting_pitching_edge":    _pitching_edge(hp, ap),
+        "starting_pitching_edge":    pitch_edge,
+        "pitching_edge_score":       pitch_score,    # composite score (+ = home edge)
+        "pitching_metrics_used":     pitch_metrics,  # metrics that cast a directional vote
+        "pitching_edge_reasons":     pitch_reasons,  # user-facing strings for the UI
         "offensive_projection_edge": _offensive_edge(home_off, away_off),
         "weather_park_edge":         _weather_park_edge(weather_ctx, park_ctx),
         "confidence_tier":           _confidence_tier(data_availability),
@@ -193,43 +233,106 @@ def _compute_edges(
 
 
 def _pitching_edge(hp: dict, ap: dict) -> str:
-    """Compute starting_pitching_edge label."""
-    hp_name = hp.get("name", "TBD")
-    ap_name = ap.get("name", "TBD")
+    """Compute starting_pitching_edge via weighted composite of predictive metrics.
 
-    # Neither has any pitcher data
-    has_hp = bool(hp_name and hp_name != "TBD")
-    has_ap = bool(ap_name and ap_name != "TBD")
+    Metrics and weights (positive score = home pitcher has edge):
+
+      Tier 1 — Statcast expected stats (remove defense/luck entirely)
+        xERA              weight 3.0   min_gap 0.20
+        xwOBA allowed     weight 2.5   min_gap 0.010
+
+      Tier 2 — Fielding-independent and contact-quality
+        FIP               weight 2.0   min_gap 0.25
+        K%                weight 1.5   min_gap 0.020  (higher = better)
+        Hard-hit% allowed weight 1.5   min_gap 0.030  (lower = better)
+        Barrel% allowed   weight 1.5   min_gap 0.010  (lower = better)
+
+      Tier 3 — Control and swing-and-miss
+        BB%               weight 1.0   min_gap 0.015  (lower = better)
+        Whiff%            weight 1.0   min_gap 0.020  (higher = better)
+
+      Tier 4 — Traditional (defense/BABIP-influenced, used as weak confirmation)
+        WHIP              weight 0.5   min_gap 0.10
+
+      ERA: intentionally excluded (too dependent on defense and BABIP luck).
+
+    Each metric casts a binary directional vote (+weight or -weight) only when
+    its gap between pitchers exceeds the noise threshold. Metrics below threshold
+    contribute 0 — they are too close to call and should not move the needle.
+
+    Score thresholds → edge label:
+      score ≥  1.5  → "home"
+      score ≤ -1.5  → "away"
+      |score| < 1.5 → "neutral"
+      zero metrics available for either pitcher → "mixed"
+    """
+    has_hp = bool(hp.get("name") and hp.get("name") != "TBD")
+    has_ap = bool(ap.get("name") and ap.get("name") != "TBD")
+
     if not has_hp and not has_ap:
-        return "neutral"
+        return "neutral", 0.0, 0, []
+    if not has_hp or not has_ap:
+        return "mixed", 0.0, 0, []
 
-    # Either is TBD or missing xERA
-    hp_xera = hp.get("xera")
-    ap_xera = ap.get("xera")
-    if not has_hp or not has_ap or hp_xera is None or ap_xera is None:
-        return "mixed"
+    score = 0.0
+    metrics_used = 0   # metrics that exceeded the noise threshold (cast a vote)
+    stats_seen   = 0   # metrics where both pitchers had non-None values
+    # Each vote: (home_pitcher_won: bool, user_label: str)
+    _votes: list[tuple[bool, str]] = []
 
-    # Both have xERA — compute diff (positive = home pitcher better)
-    diff = ap_xera - hp_xera
+    def _vote(
+        hp_val, ap_val,
+        weight: float,
+        lower_is_better: bool,
+        min_gap: float,
+        user_label: str,
+    ) -> None:
+        """Cast a weighted directional vote if the gap exceeds the noise floor."""
+        nonlocal score, metrics_used, stats_seen
+        if hp_val is None or ap_val is None:
+            return
+        stats_seen += 1
+        diff = (ap_val - hp_val) if lower_is_better else (hp_val - ap_val)
+        if abs(diff) < min_gap:
+            return
+        home_wins = diff > 0
+        score += weight if home_wins else -weight
+        metrics_used += 1
+        _votes.append((home_wins, user_label))
 
-    if diff >= 0.45:
-        return "home"
-    if diff <= -0.45:
-        return "away"
+    # Tier 1 — Statcast expected (highest predictive value; no defense/luck)
+    _vote(hp.get("xera"),          ap.get("xera"),          3.0, True,  0.20,  "Better expected ERA (xERA)")
+    _vote(hp.get("xwoba_allowed"), ap.get("xwoba_allowed"), 2.5, True,  0.010, "Better xwOBA allowed")
 
-    abs_diff = abs(diff)
-    if 0.20 <= abs_diff < 0.45:
-        # Use WHIP as tiebreaker
-        hp_whip = hp.get("whip")
-        ap_whip = ap.get("whip")
-        if hp_whip is not None and ap_whip is not None:
-            whip_diff = ap_whip - hp_whip  # positive = home pitcher better
-            if abs(whip_diff) >= 0.10 and (whip_diff > 0) == (diff > 0):
-                return "home" if diff > 0 else "away"
-        return "mixed"
+    # Tier 2 — Fielding-independent and contact quality
+    _vote(hp.get("fip"),                  ap.get("fip"),                  2.0, True,  0.25,  "Better FIP")
+    _vote(hp.get("k_pct"),                ap.get("k_pct"),                1.5, False, 0.020, "Higher strikeout rate")
+    _vote(hp.get("hard_hit_pct_allowed"), ap.get("hard_hit_pct_allowed"), 1.5, True,  0.030, "Lower hard-hit rate allowed")
+    _vote(hp.get("barrel_pct_allowed"),   ap.get("barrel_pct_allowed"),   1.5, True,  0.010, "Lower barrel rate allowed")
 
-    # |diff| < 0.20
-    return "neutral"
+    # Tier 3 — Control and swing-and-miss
+    _vote(hp.get("bb_pct"),              ap.get("bb_pct"),              1.0, True,  0.015, "Lower walk rate")
+    _vote(hp.get("whiff_pct_generated"), ap.get("whiff_pct_generated"), 1.0, False, 0.020, "Higher whiff rate")
+
+    # Tier 4 — Traditional (BABIP/defense-influenced; weakest signal)
+    _vote(hp.get("whip"), ap.get("whip"), 0.5, True, 0.10, "Better WHIP")
+
+    if stats_seen == 0:
+        return "mixed", 0.0, 0, []
+
+    # Build the reasons list: only the metrics that voted FOR the winning side.
+    # Contradicting signals are intentionally omitted to keep the display compact.
+    if score >= 1.5:
+        label   = "home"
+        reasons = [lbl for (home_wins, lbl) in _votes if home_wins]
+    elif score <= -1.5:
+        label   = "away"
+        reasons = [lbl for (home_wins, lbl) in _votes if not home_wins]
+    else:
+        label   = "neutral"
+        reasons = []   # evenly matched — no single winner to explain
+
+    return label, round(score, 2), metrics_used, reasons
 
 
 def _offensive_edge(home_off: dict, away_off: dict) -> str:
@@ -458,6 +561,30 @@ def _player_team(result: Any) -> str:
     return ""
 
 
+def _format_streak(streak_code: str) -> str:
+    """Convert a raw MLB API streakCode ('W3', 'L1') to plain English.
+
+    Rules:
+      W1  → "Won last game"       (not "win streak" — only one game)
+      W2+ → "2-game win streak"
+      L1  → "Lost last game"
+      L2+ → "2-game losing streak"
+      ""  → ""
+    """
+    if not streak_code or len(streak_code) < 2:
+        return ""
+    direction = streak_code[0].upper()
+    try:
+        n = int(streak_code[1:])
+    except ValueError:
+        return streak_code  # pass through unrecognised codes unchanged
+    if direction == "W":
+        return "Won last game" if n == 1 else f"{n}-game win streak"
+    if direction == "L":
+        return "Lost last game" if n == 1 else f"{n}-game losing streak"
+    return streak_code
+
+
 def _parse_standings(raw: dict) -> dict:
     """Parse MLB API standings response into {team_id: record_dict}."""
     out: dict = {}
@@ -475,17 +602,113 @@ def _parse_standings(raw: dict) -> dict:
             ar  = tr.get("awayRecord", {})
             wins   = tr.get("wins", 0)
             losses = tr.get("losses", 0)
+
+            # Last-ten games split (from splitRecords when standingsTypes=regularSeason)
+            l10w: int | None = None
+            l10l: int | None = None
+            for sr in tr.get("records", {}).get("splitRecords", []):
+                if sr.get("type") == "lastTen":
+                    l10w = sr.get("wins")
+                    l10l = sr.get("losses")
+                    break
+
             out[team_id] = {
-                "wins":        wins,
-                "losses":      losses,
-                "win_pct":     tr.get("winningPercentage"),
-                "streak":      streak_code,
-                "home_wins":   hr.get("wins"),
-                "home_losses": hr.get("losses"),
-                "away_wins":   ar.get("wins"),
-                "away_losses": ar.get("losses"),
+                "wins":              wins,
+                "losses":            losses,
+                "win_pct":           tr.get("winningPercentage"),
+                "streak":            streak_code,               # raw: "W3", "L1", ""
+                "streak_label":      _format_streak(streak_code),  # human: "3-game win streak"
+                "home_wins":         hr.get("wins"),
+                "home_losses":       hr.get("losses"),
+                "away_wins":         ar.get("wins"),
+                "away_losses":       ar.get("losses"),
+                "last_ten_wins":     l10w,
+                "last_ten_losses":   l10l,
             }
     return out
+
+
+def _fetch_team_pitching(team_id: int, mlb_api: Any, season: int) -> dict:
+    """Fetch team season pitching aggregate stats via mlb_api.get_team_stats()."""
+    if not mlb_api or not team_id:
+        return {}
+    try:
+        if hasattr(mlb_api, "get_team_stats"):
+            return mlb_api.get_team_stats(int(team_id), int(season), "pitching") or {}
+    except Exception as exc:
+        logger.warning("_fetch_team_pitching failed (team=%s): %s", team_id, exc)
+    return {}
+
+
+def _team_form(record: dict) -> dict:
+    """Build a structured team form dict from a parsed standings record."""
+    if not record:
+        return {"available": False}
+    l10w = record.get("last_ten_wins")
+    l10l = record.get("last_ten_losses")
+    return {
+        "available":       True,
+        "wins":            record.get("wins"),
+        "losses":          record.get("losses"),
+        "win_pct":         record.get("win_pct"),
+        "streak":          record.get("streak", ""),         # raw code, e.g. "W3"
+        "streak_label":    record.get("streak_label", ""),   # human text, e.g. "3-game win streak"
+        "last_ten_wins":   l10w,
+        "last_ten_losses": l10l,
+        "home_wins":       record.get("home_wins"),
+        "home_losses":     record.get("home_losses"),
+        "away_wins":       record.get("away_wins"),
+        "away_losses":     record.get("away_losses"),
+    }
+
+
+def _bullpen_ctx(team_pitching: dict) -> dict:
+    """Build a bullpen/pitching context dict from team season pitching stats.
+
+    The MLB Stats API returns team-aggregate pitching numbers (not split by
+    starter vs reliever), but saves, blownSaves, and holds are reliever-specific.
+    ERA and WHIP are team-wide and used as a pitching-quality proxy.
+    """
+    if not team_pitching:
+        return {"available": False}
+
+    def _f(key: str):
+        v = team_pitching.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _i(key: str):
+        v = team_pitching.get(key)
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    era        = _f("era")
+    saves      = _i("saves")
+    blown      = _i("blownSaves")
+    holds      = _i("holds")
+    strikeouts = _i("strikeOuts")
+    whip       = _f("whip")
+
+    save_pct: float | None = None
+    if saves is not None and blown is not None:
+        opps = (saves or 0) + (blown or 0)
+        save_pct = round(saves / opps, 3) if opps > 0 else None
+
+    available = era is not None or saves is not None
+    return {
+        "available":   available,
+        "era":         round(era,  2) if era  is not None else None,
+        "whip":        round(whip, 2) if whip is not None else None,
+        "saves":       saves,
+        "blown_saves": blown,
+        "holds":       holds,
+        "save_pct":    save_pct,
+        "strikeouts":  strikeouts,
+    }
 
 
 def _pitcher_ctx(pitcher: dict, team_abbr: str) -> dict:
